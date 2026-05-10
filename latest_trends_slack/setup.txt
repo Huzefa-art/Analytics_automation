@@ -1,0 +1,167 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DAILY AI & TECH DIGEST → SLACK
+  Complete Setup Guide (Free, No Paid APIs)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT THIS DOES
+──────────────
+Every morning at 9 AM (Karachi time), GitHub's free servers
+automatically run your script which:
+  1. Scrapes Product Hunt top launches
+  2. Scrapes GitHub Trending repos
+  3. Pulls Hacker News Show HN products
+  4. Filters for AI / software / dev tools
+  5. Posts a clean digest to your Slack channel
+
+Total cost: $0.00 forever.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — CREATE A SLACK WEBHOOK URL  (2 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://api.slack.com/apps
+2. Click "Create New App" → "From scratch"
+3. Name it anything e.g. "Tech Digest Bot"
+4. Select your Slack workspace → click "Create App"
+5. In the left sidebar click "Incoming Webhooks"
+6. Toggle "Activate Incoming Webhooks" → ON
+7. Scroll down → click "Add New Webhook to Workspace"
+8. Choose the Slack channel you want the digest in → click "Allow"
+9. Copy the Webhook URL — it looks like:
+   https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ
+
+   ⚠  SAVE THIS URL — you will need it in Step 3
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — CREATE A GITHUB REPO  (2 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://github.com/new
+2. Name your repo e.g. "ai-tech-digest"
+3. Set it to PUBLIC (unlimited free Actions minutes)
+   → If you want Private, you still get 2000 free min/month
+      and this script uses only ~30 min/month — totally fine
+4. Click "Create repository"
+5. Upload these 4 files to the repo root:
+
+   digest.py
+   requirements.txt
+
+   And create this folder structure:
+   .github/
+   └── workflows/
+       └── daily_digest.yml
+
+   HOW TO UPLOAD:
+   → On the repo page click "Add file" → "Upload files"
+   → Upload digest.py and requirements.txt
+   → For the workflow file, click "Add file" → "Create new file"
+     Name it exactly:  .github/workflows/daily_digest.yml
+     Paste the contents of daily_digest.yml into it
+     Click "Commit new file"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — ADD YOUR SLACK WEBHOOK AS A SECRET  (1 minute)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This keeps your webhook URL private and secure.
+
+1. In your GitHub repo → click "Settings" (top menu)
+2. Left sidebar → "Secrets and variables" → "Actions"
+3. Click "New repository secret"
+4. Name:   SLACK_WEBHOOK_URL
+   Value:  paste your webhook URL from Step 1
+5. Click "Add secret"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4 — TEST IT MANUALLY  (1 minute)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Don't wait until tomorrow — trigger it right now:
+
+1. In your repo → click "Actions" tab
+2. Left sidebar → click "Daily AI & Tech Digest"
+3. Click "Run workflow" → "Run workflow" (green button)
+4. Wait ~30 seconds
+5. Check your Slack channel — the digest should appear!
+
+If it fails, click the failed run → check the logs.
+Most common issue: wrong webhook URL in secrets.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5 — CHANGE DELIVERY TIME (optional)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The default is 9:00 AM Karachi time (UTC+5 = 4:00 AM UTC).
+To change it, edit .github/workflows/daily_digest.yml
+
+Find this line:
+    - cron: '0 4 * * *'
+
+Format is:  'MINUTE HOUR * * *'
+Examples (all UTC, subtract 5 for Karachi):
+
+  8 AM  Karachi  →  '0 3 * * *'
+  9 AM  Karachi  →  '0 4 * * *'   ← default
+  10 AM Karachi  →  '0 5 * * *'
+  12 PM Karachi  →  '0 7 * * *'
+  6 PM  Karachi  →  '0 13 * * *'
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 6 — CHANGE WHICH CHANNEL IT POSTS TO (optional)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The channel is controlled by your Slack Webhook URL.
+Each webhook is tied to one channel.
+
+To change channel:
+1. Go back to https://api.slack.com/apps → your app
+2. Incoming Webhooks → Add New Webhook → pick new channel
+3. Copy the new URL
+4. Go to GitHub repo → Settings → Secrets → update SLACK_WEBHOOK_URL
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM: Nothing appears in Slack
+FIX: Check repo → Actions → latest run → view logs
+     Most likely the SLACK_WEBHOOK_URL secret is wrong
+
+PROBLEM: GitHub Actions tab doesn't show the workflow
+FIX: Make sure the file is at exactly this path in your repo:
+     .github/workflows/daily_digest.yml
+
+PROBLEM: Workflow stopped running after a while
+FIX: GitHub pauses scheduled workflows after 60 days of
+     repo inactivity. Go to Actions tab → click "Enable workflow"
+
+PROBLEM: No products showing (0 found)
+FIX: Product Hunt or GitHub may have changed their HTML.
+     Open an issue or re-run — usually a temporary glitch.
+
+PROBLEM: Want to run it locally to test
+FIX: 
+     pip install -r requirements.txt
+     set SLACK_WEBHOOK_URL=your_webhook_url    (Windows)
+     export SLACK_WEBHOOK_URL=your_webhook_url (Mac/Linux)
+     python digest.py
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILES IN THIS PROJECT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+digest.py                          → main script
+requirements.txt                   → Python dependencies
+.github/workflows/daily_digest.yml → GitHub Actions scheduler
+setup.txt                          → this file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
