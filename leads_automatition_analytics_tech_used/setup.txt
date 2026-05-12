@@ -1,0 +1,39 @@
+# Lead Automation Analytics - Setup Guide
+
+## 1. Environment Setup
+1. Install Python 3.x
+2. Create and activate virtual environment:
+   python3 -m venv venv
+   source venv/bin/activate  # Mac/Linux
+   venv\Scripts\activate     # Windows
+3. Install dependencies:
+   pip install -r requirements.txt
+4. Install browser drivers:
+   playwright install chromium
+
+## 2. Google Sheets Integration (Optional)
+To save results to Google Sheets:
+1. Place your `service_account.json` in the root folder.
+2. Ensure the sheet name in `maps_leads_scraper.py` matches your target sheet.
+
+## 3. How to Use
+
+### Step 1: Scrape Google Maps
+Run the scraper to gather leads and populate `urls.txt`:
+```bash
+python3 maps_leads_scraper.py "https://www.google.com/maps/search/property+management+in+canary+wharf"
+```
+
+### Step 2: Analyze Website Technologies
+Run the detector to analyze URLs in `urls.txt` and generate a report:
+```bash
+python3 tech_detector.py
+```
+
+The workflow now works as follows:
+1. `maps_leads_scraper.py` scrapes business details and appends unique website URLs to `urls.txt`.
+2. `tech_detector.py` reads `urls.txt`, detects technology stacks (CRM, CMS, etc.), and generates an Excel report.
+
+> [!TIP]
+> If you encounter a `venv` creation error on Ubuntu/Debian, install the missing package:
+> `sudo apt install python3.12-venv`
