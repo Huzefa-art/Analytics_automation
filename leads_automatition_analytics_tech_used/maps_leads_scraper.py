@@ -3,6 +3,7 @@ import csv
 import os
 import re
 import time
+import random
 from datetime import datetime
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
@@ -29,7 +30,7 @@ def parse_address(address):
 async def scrape_google_maps(search_url, max_results=50):
     """Scrape business listings from a Google Maps search URL."""
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         page = await context.new_page()
         await stealth_async(page)
@@ -64,7 +65,7 @@ async def scrape_google_maps(search_url, max_results=50):
                     seen_names.add(name)
                     
                     await listing.click()
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(random.uniform(2.0, 3.5)) # Random wait after click
                     
                     address = "N/A"
                     website = "N/A"
@@ -101,8 +102,8 @@ async def scrape_google_maps(search_url, max_results=50):
                     print(f"Error extracting listing: {e}")
                     continue
             
-            await page.evaluate(f'document.querySelector("{feed_selector}").scrollBy(0, 1000)')
-            await asyncio.sleep(2)
+            await page.evaluate(f"document.querySelector('{feed_selector}').scrollBy(0, 1000)")
+            await asyncio.sleep(random.uniform(2.0, 4.0)) # Random wait after scroll
             
             end_msg = await page.query_selector('text="You\'ve reached the end of the list"')
             if end_msg:

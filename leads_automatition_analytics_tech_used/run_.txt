@@ -1,0 +1,11 @@
+# --- FULL LEAD AUTOMATION & AD ANALYSIS PIPELINE ---
+
+# 1. Scrape Leads from Google Maps (Use single quotes for the URL)
+python3 maps_leads_scraper.py 'https://www.google.com/maps/search/real+estate+agency+near+London,+UK/@51.5106433,-0.1951401,12z/data=!3m1!4b1?entry=ttu&g_ep=EgoyMDI2MDUxMy4wIKXMDSoASAFQAw%3D%3D'
+
+# 2. Tech Detection & Facebook Link Discovery (Generates an Excel Report)
+python3 tech_detector.py urls.txt final_leads_report.xlsx
+
+# 3. Deep-Scrape Meta Ads Portfolio (Processes the Excel Report from step 2)
+# Replace 'final_leads_report.xlsx' with the actual filename generated in step 2.
+python3 ad_portfolio_scraper.py final_leads_report.xlsx

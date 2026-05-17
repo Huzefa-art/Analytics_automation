@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/venv # Don't sync venv from host
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./dashboard-app:/app
+      - /app/node_modules # Don't sync node_modules from host
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://localhost:8000

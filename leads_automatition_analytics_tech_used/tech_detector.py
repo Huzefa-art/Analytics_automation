@@ -2,6 +2,7 @@ import requests
 import re
 import time
 import sys
+import random
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from openpyxl import Workbook
@@ -11,17 +12,28 @@ from datetime import datetime
 
 # ── Suppress SSL warnings ──────────────────────────────────────────────────────
 import urllib3
+import asyncio
+from ads_analyzer import check_meta_ads
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-HEADERS_REQ = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+# Email Regex
+EMAIL_REGEX = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+]
+
+def get_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.google.com/",
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FINGERPRINTS  { category: { tech_name: [patterns] } }
@@ -149,21 +161,46 @@ def normalize_url(url: str) -> str:
 
 
 def fetch_page(url: str, timeout: int = 12):
+    headers = get_headers()
     try:
-        resp = requests.get(url, headers=HEADERS_REQ, timeout=timeout, verify=False, allow_redirects=True)
-        return resp
-    except requests.exceptions.SSLError:
         try:
+            resp = requests.get(url, headers=headers, timeout=timeout, verify=False, allow_redirects=True)
+            return resp
+        except requests.exceptions.SSLError:
             url_http = url.replace("https://", "http://")
-            return requests.get(url_http, headers=HEADERS_REQ, timeout=timeout, verify=False, allow_redirects=True)
-        except Exception:
-            return None
+            return requests.get(url_http, headers=headers, timeout=timeout, verify=False, allow_redirects=True)
     except Exception:
         return None
+def extract_social_links(soup) -> dict:
+    fb_link = "N/A"
+    for a in soup.find_all("a", href=True):
+        href = a["href"].lower()
+        if "facebook.com/" in href and not any(x in href for x in ["sharer", "share.php", "messenger.com", "groups"]):
+            fb_link = a["href"].split("?")[0].rstrip("/")
+            break
+    return {"Facebook": fb_link}
+
+def extract_emails(soup, html_text) -> str:
+    emails = set()
+    
+    # 1. Look for mailto: links
+    for a in soup.select('a[href^="mailto:"]'):
+        email = a["href"].replace("mailto:", "").split("?")[0].strip()
+        if re.match(EMAIL_REGEX, email):
+            emails.add(email)
+            
+    # 2. Look for patterns in text
+    found_in_text = re.findall(EMAIL_REGEX, html_text)
+    for email in found_in_text:
+        # Avoid common false positives like image extensions
+        if not email.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg')):
+            emails.add(email)
+            
+    return ", ".join(sorted(list(emails))) if emails else "N/A"
 
 
 def detect_technologies(url: str) -> dict:
-    result = {"url": url, "status": "", "error": ""}
+    result = {"url": url, "status": "", "error": "", "facebook": "N/A"}
     for cat in FINGERPRINTS:
         result[cat] = []
 
@@ -172,6 +209,11 @@ def detect_technologies(url: str) -> dict:
         result["status"] = "❌ Failed"
         result["error"] = "Could not connect"
         return result
+    
+    soup = BeautifulSoup(resp.text, "html.parser")
+    socials = extract_social_links(soup)
+    result["facebook"] = socials["Facebook"]
+    result["email"] = extract_emails(soup, resp.text)
 
     result["status"] = f"✅ {resp.status_code}"
 
@@ -182,8 +224,6 @@ def detect_technologies(url: str) -> dict:
     headers_str = " ".join(f"{k.lower()}: {v.lower()}" for k, v in resp.headers.items())
     cookies_str = " ".join(resp.cookies.keys()).lower()
 
-    # Extract script srcs separately for cleaner matching
-    soup = BeautifulSoup(html, "html.parser")
     scripts = " ".join(
         (tag.get("src", "") + " " + tag.string if tag.string else tag.get("src", ""))
         for tag in soup.find_all("script")
@@ -211,6 +251,9 @@ def build_excel(results: list, output_path: str):
     ws = wb.active
     ws.title = "Tech Stack Report"
 
+    # ── SOCIAL & ADS SHEET ───────────────────────────────────────────────────
+    ws_ads = wb.create_sheet("Facebook & Ads")
+
     categories = list(FINGERPRINTS.keys())
 
     # ── Colour palette ─────────────────────────────────────────────────────
@@ -232,7 +275,7 @@ def build_excel(results: list, output_path: str):
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
     # ── Row 1: Main header ─────────────────────────────────────────────────
-    total_cols = 3 + len(categories)   # URL | Status | Error | …categories
+    total_cols = 4 + len(categories)   # URL | Status | Error | Email | …categories
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
     hdr_cell = ws.cell(row=1, column=1,
         value=f"🔍  Website Technology Report  —  Generated {datetime.now().strftime('%d %b %Y %H:%M')}")
@@ -241,11 +284,11 @@ def build_excel(results: list, output_path: str):
     hdr_cell.alignment = center
 
     # ── Row 2: Column headers ──────────────────────────────────────────────
-    col_headers = ["Website URL", "Status", "Error"] + categories
+    col_headers = ["Website URL", "Status", "Error", "Email"] + categories
     for c, h in enumerate(col_headers, start=1):
         cell = ws.cell(row=2, column=c, value=h)
-        cat_idx = c - 4   # 0-based for categories
-        if c <= 3:
+        cat_idx = c - 5   # 0-based for categories
+        if c <= 4:
             bg = HDR_BG
         else:
             bg = "2E6099"   # slightly lighter navy for category headers
@@ -279,9 +322,16 @@ def build_excel(results: list, output_path: str):
         c.fill = PatternFill("solid", start_color=row_bg)
         c.border = thin_border
 
+        # Email
+        c = ws.cell(row=row_idx, column=4, value=res.get("email", "N/A"))
+        c.font = data_font
+        c.alignment = left_wrap
+        c.fill = PatternFill("solid", start_color=row_bg)
+        c.border = thin_border
+
         # Category columns
         for cat_idx, cat in enumerate(categories, start=0):
-            col = 4 + cat_idx
+            col = 5 + cat_idx
             detected = res.get(cat, [])
             value = ", ".join(detected) if detected else "—"
             cell_bg = CAT_COLORS[cat_idx % len(CAT_COLORS)] if detected else row_bg
@@ -295,7 +345,7 @@ def build_excel(results: list, output_path: str):
             c.border = thin_border
 
     # ── Column widths ──────────────────────────────────────────────────────
-    col_widths = [38, 10, 20] + [24] * len(categories)
+    col_widths = [38, 10, 20, 25] + [24] * len(categories)
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -307,6 +357,51 @@ def build_excel(results: list, output_path: str):
 
     # ── Freeze top 2 rows ─────────────────────────────────────────────────
     ws.freeze_panes = "A3"
+
+    # ── SOCIAL & ADS SHEET CONTENT ──────────────────────────────────────────
+    ws_ads.column_dimensions["A"].width = 38
+    ws_ads.column_dimensions["B"].width = 38
+    ws_ads.column_dimensions["C"].width = 25
+    ws_ads.column_dimensions["D"].width = 15
+    ws_ads.column_dimensions["E"].width = 10
+    ws_ads.column_dimensions["F"].width = 20
+
+    ads_headers = ["Website URL", "Facebook Page", "Email", "Ads Active", "Ad Count", "Oldest Ad Date"]
+    for c, h in enumerate(ads_headers, start=1):
+        cell = ws_ads.cell(row=1, column=c, value=h)
+        cell.font = hdr_font
+        cell.fill = PatternFill("solid", start_color=HDR_BG)
+        cell.alignment = center
+        cell.border = thin_border
+
+    for row_idx, res in enumerate(results, start=2):
+        row_bg = "FFFFFF" if row_idx % 2 == 0 else ALT_ROW
+        ws_ads.cell(row=row_idx, column=1, value=res["url"]).fill = PatternFill("solid", start_color=row_bg)
+        ws_ads.cell(row=row_idx, column=2, value=res["facebook"]).fill = PatternFill("solid", start_color=row_bg)
+        ws_ads.cell(row=row_idx, column=3, value=res.get("email", "N/A")).fill = PatternFill("solid", start_color=row_bg)
+        
+        ad_info = res.get("ad_info", {"active": "Checking...", "count": "—", "oldest_date": "—"})
+        
+        c4 = ws_ads.cell(row=row_idx, column=4, value=ad_info["active"])
+        c5 = ws_ads.cell(row=row_idx, column=5, value=ad_info["count"])
+        c6 = ws_ads.cell(row=row_idx, column=6, value=ad_info["oldest_date"])
+        
+        # Color coding for "Ads Active"
+        if ad_info["active"] == "Yes":
+           c4.font = Font(name="Arial", size=9, bold=True, color="1A5E1A")
+           c4.fill = PatternFill("solid", start_color="C6EFCE")
+        elif ad_info["active"] == "No":
+           c4.font = Font(name="Arial", size=9, color="999999")
+           c4.fill = PatternFill("solid", start_color="FFCCCC")
+        else:
+           c4.fill = PatternFill("solid", start_color=row_bg)
+
+        c5.fill = PatternFill("solid", start_color=row_bg)
+        c6.fill = PatternFill("solid", start_color=row_bg)
+        
+        for c in range(1, 7):
+            ws_ads.cell(row=row_idx, column=c).border = thin_border
+            if c != 4: ws_ads.cell(row=row_idx, column=c).font = data_font
 
     # ── Summary sheet ─────────────────────────────────────────────────────
     ws2 = wb.create_sheet("Summary")
@@ -359,10 +454,20 @@ def main():
     for i, url in enumerate(urls, 1):
         print(f"  [{i}/{len(urls)}]  {url}", end="  ", flush=True)
         res = detect_technologies(url)
+        
+        # Check Meta Ads if Facebook page found
+        if res["facebook"] != "N/A":
+            print(f"| Checking Ads ...", end=" ", flush=True)
+            ad_info = asyncio.run(check_meta_ads(res["facebook"]))
+            res["ad_info"] = ad_info
+            print(f"→ {ad_info['active']}", end=" ", flush=True)
+        else:
+            res["ad_info"] = {"active": "N/A", "count": 0, "oldest_date": "—"}
+
         results.append(res)
         found = sum(len(v) for k, v in res.items() if isinstance(v, list))
-        print(f"→  {res['status']}  |  {found} tech detected")
-        time.sleep(0.5)   # be polite
+        print(f"| {found} tech detected")
+        time.sleep(random.uniform(1.2, 3.5))   # Randomized delay to prevent blocking
 
     build_excel(results, output)
     print(f"\n📊  Done — {len(results)} sites analysed\n")
