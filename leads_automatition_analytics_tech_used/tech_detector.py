@@ -199,8 +199,8 @@ def extract_emails(soup, html_text) -> str:
     return ", ".join(sorted(list(emails))) if emails else "N/A"
 
 
-def detect_technologies(url: str) -> dict:
-    result = {"url": url, "status": "", "error": "", "facebook": "N/A"}
+def detect_technologies(url: str, no_tech: bool = False) -> dict:
+    result = {"url": url, "status": "", "error": "", "facebook": "N/A", "email": "N/A"}
     for cat in FINGERPRINTS:
         result[cat] = []
 
@@ -217,26 +217,27 @@ def detect_technologies(url: str) -> dict:
 
     result["status"] = f"✅ {resp.status_code}"
 
-    html = resp.text
-    html_lower = html.lower()
+    if not no_tech:
+        html = resp.text
+        html_lower = html.lower()
 
-    # Combine headers + cookies + html into one big searchable blob
-    headers_str = " ".join(f"{k.lower()}: {v.lower()}" for k, v in resp.headers.items())
-    cookies_str = " ".join(resp.cookies.keys()).lower()
+        # Combine headers + cookies + html into one big searchable blob
+        headers_str = " ".join(f"{k.lower()}: {v.lower()}" for k, v in resp.headers.items())
+        cookies_str = " ".join(resp.cookies.keys()).lower()
 
-    scripts = " ".join(
-        (tag.get("src", "") + " " + tag.string if tag.string else tag.get("src", ""))
-        for tag in soup.find_all("script")
-    ).lower()
+        scripts = " ".join(
+            (tag.get("src", "") + " " + tag.string if tag.string else tag.get("src", ""))
+            for tag in soup.find_all("script")
+        ).lower()
 
-    haystack = html_lower + " " + headers_str + " " + cookies_str + " " + scripts
+        haystack = html_lower + " " + headers_str + " " + cookies_str + " " + scripts
 
-    for category, techs in FINGERPRINTS.items():
-        found = []
-        for tech_name, patterns in techs.items():
-            if any(p.lower() in haystack for p in patterns):
-                found.append(tech_name)
-        result[category] = found
+        for category, techs in FINGERPRINTS.items():
+            found = []
+            for tech_name, patterns in techs.items():
+                if any(p.lower() in haystack for p in patterns):
+                    found.append(tech_name)
+            result[category] = found
 
     return result
 
@@ -436,11 +437,84 @@ def build_excel(results: list, output_path: str):
     print(f"\n✅  Saved: {output_path}")
 
 
+def update_results_csv(tech_results):
+    csv_path = "results.csv"
+    import pandas as pd
+    import os
+    import re
+    
+    flat_results = []
+    for r in tech_results:
+        flat_r = {
+            "Website": r["url"],
+            "Facebook Page": r.get("facebook", "N/A"),
+            "Email": r.get("email", "N/A"),
+            "Ads Active": r.get("ad_info", {}).get("active", "N/A"),
+            "Ad Count": r.get("ad_info", {}).get("count", "—"),
+            "Oldest Ad Date": r.get("ad_info", {}).get("oldest_date", "—")
+        }
+        for cat in FINGERPRINTS:
+            detected = r.get(cat, [])
+            flat_r[cat] = ", ".join(detected) if detected else "N/A"
+        flat_results.append(flat_r)
+        
+    df_tech = pd.DataFrame(flat_results)
+    
+    if os.path.exists(csv_path):
+        try:
+            df_orig = pd.read_csv(csv_path)
+            
+            def clean_url(u):
+                if not isinstance(u, str):
+                    return ""
+                u = u.lower().strip()
+                u = re.sub(r'^https?://', '', u)
+                u = re.sub(r'^www\.', '', u)
+                u = u.rstrip('/')
+                return u
+                
+            df_orig['_match_url'] = df_orig['Website'].apply(clean_url)
+            df_tech['_match_url'] = df_tech['Website'].apply(clean_url)
+            
+            # Remove any tech columns from df_orig before merge to avoid duplicates
+            cols_to_drop = [c for c in df_tech.columns if c != '_match_url' and c in df_orig.columns]
+            if cols_to_drop:
+                df_orig = df_orig.drop(columns=cols_to_drop)
+                
+            df_merged = pd.merge(df_orig, df_tech, on='_match_url', how='left')
+            df_merged = df_merged.drop(columns=['_match_url'])
+            
+            df_merged.to_csv(csv_path, index=False)
+            print(f"Updated existing {csv_path} with detected technologies.")
+        except Exception as e:
+            print(f"Error merging with results.csv: {e}")
+    else:
+        df_new = pd.DataFrame(flat_results)
+        df_new["Business Name"] = df_new["Website"]
+        df_new["City"] = "N/A"
+        df_new["Country"] = "N/A"
+        df_new["Address"] = "N/A"
+        df_new["Phone"] = "N/A"
+        
+        cols = ["Business Name", "Website", "City", "Country", "Address", "Phone", "Facebook Page", "Email", "Ads Active", "Ad Count", "Oldest Ad Date"] + list(FINGERPRINTS.keys())
+        df_new = df_new.reindex(columns=cols)
+        df_new.to_csv(csv_path, index=False)
+        print(f"Created new {csv_path} with detected technologies.")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    urls_file  = sys.argv[1] if len(sys.argv) > 1 else "urls.txt"
-    output     = sys.argv[2] if len(sys.argv) > 2 else f"tech_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("urls_file", nargs="?", default="urls.txt")
+    parser.add_argument("output", nargs="?", default=None)
+    parser.add_argument("--no-tech", action="store_true", help="Skip tech stack detection")
+    parser.add_argument("--no-ads", action="store_true", help="Skip Meta Ads detection")
+    args = parser.parse_args()
+
+    urls_file = args.urls_file
+    output = args.output if args.output else f"tech_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     try:
         urls = load_urls(urls_file)
@@ -453,16 +527,16 @@ def main():
 
     for i, url in enumerate(urls, 1):
         print(f"  [{i}/{len(urls)}]  {url}", end="  ", flush=True)
-        res = detect_technologies(url)
+        res = detect_technologies(url, no_tech=args.no_tech)
         
         # Check Meta Ads if Facebook page found
-        if res["facebook"] != "N/A":
+        if not args.no_ads and res["facebook"] != "N/A":
             print(f"| Checking Ads ...", end=" ", flush=True)
             ad_info = asyncio.run(check_meta_ads(res["facebook"]))
             res["ad_info"] = ad_info
             print(f"→ {ad_info['active']}", end=" ", flush=True)
         else:
-            res["ad_info"] = {"active": "N/A", "count": 0, "oldest_date": "—"}
+            res["ad_info"] = {"active": "N/A" if args.no_ads else "No", "count": 0, "oldest_date": "—"}
 
         results.append(res)
         found = sum(len(v) for k, v in res.items() if isinstance(v, list))
@@ -471,6 +545,11 @@ def main():
 
     build_excel(results, output)
     print(f"\n📊  Done — {len(results)} sites analysed\n")
+    
+    try:
+        update_results_csv(results)
+    except Exception as e:
+        print(f"Error updating results.csv: {e}")
 
 
 if __name__ == "__main__":
