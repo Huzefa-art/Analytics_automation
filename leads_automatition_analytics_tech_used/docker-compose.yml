@@ -25,4 +25,30 @@ services:
     depends_on:
       - backend
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://nginx:80
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+
+  # ------------------------------------------------
+  # Ngrok – automatically exposes the app via a permanent static public URL
+  # ------------------------------------------------
+  tunnel:
+    image: ngrok/ngrok:latest
+    restart: always
+    depends_on:
+      - nginx
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command: http nginx:80 --domain=${NGROK_DOMAIN}
+
+networks:
+  default:
+    driver: bridge

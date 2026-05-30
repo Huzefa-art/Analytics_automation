@@ -8,6 +8,7 @@ from datetime import datetime
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 import pandas as pd
+import db_manager
 
 # --- Configuration ---
 RESULTS_CSV = "results.csv"
@@ -36,7 +37,10 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
+        )
         page = await context.new_page()
         await stealth_async(page)
         
@@ -74,13 +78,17 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
         # Multiple selector wait strategy
         feed_selector = 'div[role="feed"]'
         single_selector = 'h1.DUwDvf'
-        no_results_selector = 'text="Google Maps can\'t find"'
+        combined_selector = f'{feed_selector}, {single_selector}'
         
         log("Waiting for layout container...")
         try:
-            await page.wait_for_selector(f'{feed_selector}, {single_selector}, {no_results_selector}', timeout=15000)
+            await page.wait_for_selector(combined_selector, timeout=15000)
         except Exception as e:
-            log(f"Timeout waiting for layout, checking DOM structure...")
+            content = await page.content()
+            if "Google Maps can't find" in content:
+                log("Google Maps can't find results matching this search.")
+            else:
+                log(f"Timeout waiting for layout, checking DOM structure...")
 
         is_single = await page.query_selector(single_selector) is not None
         is_feed = await page.query_selector(feed_selector) is not None
@@ -97,6 +105,7 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
                 address = "N/A"
                 website = "N/A"
                 phone = "N/A"
+                industry = "N/A"
                 
                 # Asynchronous retry loop to wait for detail pane to fully load
                 for _ in range(5):
@@ -140,11 +149,29 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
                             website = href
                             break
                 
+                try:
+                    for selector in [
+                        'button[jsaction="pane.rating.category"]',
+                        'button[class*="category"]',
+                        'span[class*="category"]',
+                        'button[jsaction*="category"]',
+                        'button[jsaction*="pane.rating.category"]'
+                    ]:
+                        industry_elem = await page.query_selector(selector)
+                        if industry_elem:
+                            txt = await industry_elem.inner_text()
+                            if txt and len(txt.strip()) > 0:
+                                industry = txt.strip()
+                                break
+                except Exception as e:
+                    log(f"Warning: could not extract industry: {e}")
+
                 city, country = parse_address(address)
-                log(f"Found Single Listing: {name} | City: {city} | Website: {website}")
+                log(f"Found Single Listing: {name} | Industry: {industry} | City: {city} | Website: {website}")
                 
                 results.append({
                     "Business Name": name,
+                    "Industry": industry,
                     "Website": website,
                     "City": city,
                     "Country": country,
@@ -182,6 +209,7 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
                         address = "N/A"
                         website = "N/A"
                         phone = "N/A"
+                        industry = "N/A"
                         
                         # Asynchronous retry loop to wait for detail pane to load
                         for _ in range(5):
@@ -225,11 +253,43 @@ async def scrape_google_maps(search_url, max_results=50, log_callback=None):
                                     website = href
                                     break
                         
+                        try:
+                            # 1. Try to extract industry directly from the feed card (listing)
+                            divs = await listing.query_selector_all('div.W4Efsd')
+                            for div in divs:
+                                text = await div.inner_text()
+                                if text and not ("★" in text or "(" in text and ")" in text):
+                                    if "·" in text:
+                                        parts = text.split("·")
+                                        potential_cat = parts[0].strip()
+                                        if potential_cat and not any(x in potential_cat.lower() for x in ["open", "closed", "website", "directions", "call", "share"]):
+                                            industry = potential_cat
+                                            break
+                            
+                            # 2. Fallback to detail pane selectors if not found on the feed card
+                            if industry == "N/A":
+                                for selector in [
+                                    'button[jsaction="pane.rating.category"]',
+                                    'button[class*="category"]',
+                                    'span[class*="category"]',
+                                    'button[jsaction*="category"]',
+                                    'button[jsaction*="pane.rating.category"]'
+                                ]:
+                                    industry_elem = await page.query_selector(selector)
+                                    if industry_elem:
+                                        txt = await industry_elem.inner_text()
+                                        if txt and len(txt.strip()) > 0:
+                                            industry = txt.strip()
+                                            break
+                        except Exception as e:
+                            log(f"Warning: could not extract industry: {e}")
+                        
                         city, country = parse_address(address)
-                        log(f"Found Lead: {name} | City: {city} | Website: {website}")
+                        log(f"Found Lead: {name} | Industry: {industry} | City: {city} | Website: {website}")
                         
                         results.append({
                             "Business Name": name,
+                            "Industry": industry,
                             "Website": website,
                             "City": city,
                             "Country": country,
@@ -275,31 +335,35 @@ def save_output(results, log_callback=None):
 
     # Clean up fields (remove decorative icons like  and  and strip surrounding whitespace/newlines)
     for r in results:
-        for k in ["Business Name", "Website", "City", "Country", "Address", "Phone"]:
+        r["Analysis Status"] = "Pending"
+        for k in ["Business Name", "Industry", "Website", "City", "Country", "Address", "Phone"]:
             if k in r and isinstance(r[k], str):
                 val = r[k].replace("", "").replace("", "").strip()
                 val = re.sub(r'^\s+|\s+$', '', val)
                 r[k] = val if val else "N/A"
 
-    # 1. Update results.csv
-    df = pd.DataFrame(results)
-    file_exists = os.path.isfile(RESULTS_CSV)
-    
-    if file_exists:
-        try:
-            # Read header of existing file to align columns perfectly
+    # 1. Save to SQLite database
+    saved_count = 0
+    for r in results:
+        if db_manager.insert_lead(r):
+            saved_count += 1
+    log(f"Saved {saved_count} scraped leads to SQLite leads.db database successfully.")
+
+    # 2. Update results.csv (Fallback backup)
+    try:
+        df = pd.DataFrame(results)
+        file_exists = os.path.isfile(RESULTS_CSV)
+        if file_exists:
             existing_df = pd.read_csv(RESULTS_CSV, nrows=0)
             existing_cols = existing_df.columns.tolist()
-            # Reindex df to match existing columns, putting any missing columns at the end and filling new columns with N/A
             for col in existing_cols:
                 if col not in df.columns:
                     df[col] = "N/A"
             df = df.reindex(columns=existing_cols)
-        except Exception as e:
-            log(f"Warning aligning columns to {RESULTS_CSV}: {e}")
-            
-    df.to_csv(RESULTS_CSV, mode='a', index=False, header=not file_exists)
-    log(f"{'Appended to' if file_exists else 'Created'} {RESULTS_CSV} with {len(results)} new results.")
+        df.to_csv(RESULTS_CSV, mode='a', index=False, header=not file_exists)
+        log(f"Successfully backed up {len(results)} leads to {RESULTS_CSV}.")
+    except Exception as e:
+        log(f"Warning backing up leads to CSV: {e}")
 
     # 2. Update urls.txt (Unique URLs only)
     new_urls = [r["Website"] for r in results if r["Website"] != "N/A"]

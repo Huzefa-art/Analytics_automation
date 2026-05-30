@@ -442,11 +442,13 @@ def update_results_csv(tech_results):
     import pandas as pd
     import os
     import re
+    import db_manager
     
     flat_results = []
     for r in tech_results:
         flat_r = {
             "Website": r["url"],
+            "Analysis Status": "Analyzed",
             "Facebook Page": r.get("facebook", "N/A"),
             "Email": r.get("email", "N/A"),
             "Ads Active": r.get("ad_info", {}).get("active", "N/A"),
@@ -458,11 +460,21 @@ def update_results_csv(tech_results):
             flat_r[cat] = ", ".join(detected) if detected else "N/A"
         flat_results.append(flat_r)
         
+        # Save dynamically to SQLite leads.db database
+        try:
+            db_manager.update_lead_analysis(r["url"], flat_r)
+        except Exception as e:
+            print(f"Error updating SQLite record for {r['url']}: {e}")
+        
     df_tech = pd.DataFrame(flat_results)
     
     if os.path.exists(csv_path):
         try:
             df_orig = pd.read_csv(csv_path)
+            
+            # Make sure "Analysis Status" exists in df_orig
+            if "Analysis Status" not in df_orig.columns:
+                df_orig.insert(1, "Analysis Status", "Pending")
             
             def clean_url(u):
                 if not isinstance(u, str):
@@ -476,27 +488,32 @@ def update_results_csv(tech_results):
             df_orig['_match_url'] = df_orig['Website'].apply(clean_url)
             df_tech['_match_url'] = df_tech['Website'].apply(clean_url)
             
-            # Remove any tech columns from df_orig before merge to avoid duplicates
-            cols_to_drop = [c for c in df_tech.columns if c != '_match_url' and c in df_orig.columns]
-            if cols_to_drop:
-                df_orig = df_orig.drop(columns=cols_to_drop)
-                
-            df_merged = pd.merge(df_orig, df_tech, on='_match_url', how='left')
-            df_merged = df_merged.drop(columns=['_match_url'])
+            url_to_index = {url: idx for idx, url in enumerate(df_orig['_match_url'].tolist()) if url}
             
-            df_merged.to_csv(csv_path, index=False)
+            # Update df_orig in-place for matching websites
+            for _, row in df_tech.iterrows():
+                match_url = row['_match_url']
+                if match_url in url_to_index:
+                    idx = url_to_index[match_url]
+                    for col in df_tech.columns:
+                        if col != '_match_url' and col != 'Website':
+                            df_orig.at[idx, col] = row[col]
+            
+            df_orig = df_orig.drop(columns=['_match_url'])
+            df_orig.to_csv(csv_path, index=False)
             print(f"Updated existing {csv_path} with detected technologies.")
         except Exception as e:
             print(f"Error merging with results.csv: {e}")
     else:
         df_new = pd.DataFrame(flat_results)
         df_new["Business Name"] = df_new["Website"]
+        df_new["Industry"] = "N/A"
         df_new["City"] = "N/A"
         df_new["Country"] = "N/A"
         df_new["Address"] = "N/A"
         df_new["Phone"] = "N/A"
         
-        cols = ["Business Name", "Website", "City", "Country", "Address", "Phone", "Facebook Page", "Email", "Ads Active", "Ad Count", "Oldest Ad Date"] + list(FINGERPRINTS.keys())
+        cols = ["Business Name", "Industry", "Analysis Status", "Website", "City", "Country", "Address", "Phone", "Facebook Page", "Email", "Ads Active", "Ad Count", "Oldest Ad Date"] + list(FINGERPRINTS.keys())
         df_new = df_new.reindex(columns=cols)
         df_new.to_csv(csv_path, index=False)
         print(f"Created new {csv_path} with detected technologies.")
