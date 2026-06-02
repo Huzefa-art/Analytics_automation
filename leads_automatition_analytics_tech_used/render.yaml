@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: antigravity-analytics-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-deploy.txt
+    startCommand: python api_cloud.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: nvidia_api_key
+        sync: false          # set manually in Render dashboard
+      - key: serp_api
+        sync: false          # set manually in Render dashboard
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_CHANNEL
+        value: "ai-analytics"
+      - key: DB_PATH
+        value: "/app/data/leads.db"
+    disk:
+      name: leads-db
+      mountPath: /app/data
+      sizeGB: 1              # free tier allows 1GB persistent disk

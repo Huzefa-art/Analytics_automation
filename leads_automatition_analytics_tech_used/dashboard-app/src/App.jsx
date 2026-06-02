@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp } from 'lucide-react';
+import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp, GitCompare } from 'lucide-react';
 import MarketResearch from './MarketResearch';
+import MarketComparison from './MarketComparison';
 
 const API_BASE = '/api';
 
@@ -367,6 +368,14 @@ function App() {
                     >
                         <TrendingUp size={18} />
                         <span>Market Research</span>
+                    </button>
+
+                    <button 
+                        className={`sidebar-nav-item ${activeTab === 'market-compare' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('market-compare')}
+                    >
+                        <GitCompare size={18} />
+                        <span>Compare Markets</span>
                     </button>
                 </nav>
 
@@ -908,6 +917,10 @@ function App() {
 
                 {activeTab === 'market-research' && (
                     <MarketResearch />
+                )}
+
+                {activeTab === 'market-compare' && (
+                    <MarketComparison />
                 )}
             </main>
 

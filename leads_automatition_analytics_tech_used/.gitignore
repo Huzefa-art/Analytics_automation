@@ -16,7 +16,11 @@ __pycache__/
 # Local data / Output files
 results.csv
 urls.txt
+urls_to_analyze.txt
 *.xlsx
+
+# SQLite database (local only — Render uses persistent disk)
+leads.db
 
 # Sensitive information
 service_account.json
@@ -32,13 +36,15 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Build outputs
+# Build outputs — DO NOT gitignore dist/ 
+# Vercel builds from source, Render doesn't need it
+# dist/ is kept out of git — Vercel builds it automatically
 dist/
 build/
 .cache/
 .parcel-cache/
 
-# Environment variables
+# Environment variables (never commit real .env)
 .env
 .env.local
 .env.development.local

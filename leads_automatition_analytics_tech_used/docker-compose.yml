@@ -1,54 +1,51 @@
-version: '3.8'
-
 services:
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────────
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    ports:
-      - "8000:8000"
+    restart: always
     volumes:
       - .:/app
-      - /app/venv # Don't sync venv from host
+      - /app/venv
     environment:
       - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    expose:
+      - "8000"
+    networks:
+      - app_net
 
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./dashboard-app:/app
-      - /app/node_modules # Don't sync node_modules from host
-    depends_on:
-      - backend
-    environment:
-      - VITE_API_URL=http://nginx:80
-
+  # ── Nginx (serves frontend static files + proxies /api to backend) ──────────
   nginx:
     image: nginx:alpine
+    restart: always
     ports:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./dashboard-app/dist:/usr/share/nginx/html:ro
     depends_on:
-      - frontend
       - backend
+    networks:
+      - app_net
 
-  # ------------------------------------------------
-  # Ngrok – automatically exposes the app via a permanent static public URL
-  # ------------------------------------------------
-  tunnel:
+  # ── Ngrok tunnel (exposes port 80 to the internet) ──────────────────────────
+  ngrok:
     image: ngrok/ngrok:latest
     restart: always
     depends_on:
       - nginx
     environment:
       - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    command: http nginx:80 --domain=${NGROK_DOMAIN}
+    command: http nginx:80
+    ports:
+      - "4040:4040"
+    networks:
+      - app_net
 
 networks:
-  default:
+  app_net:
     driver: bridge

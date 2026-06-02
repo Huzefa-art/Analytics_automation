@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import re
 
-DB_PATH = "leads.db"
+DB_PATH = os.getenv("DB_PATH", "leads.db")
 CSV_PATH = "results.csv"
 
 # Map CSV headers to SQLite column names

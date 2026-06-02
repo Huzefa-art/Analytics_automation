@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useRef } from 'react';
 import axios from 'axios';
+import { DeepRedditTab, CompetitorReviewsTab, PricingSignalsTab, DeepValidationTab } from './MarketResearchTabs';
 import {
   TrendingUp, AlertCircle, Lightbulb, Users, BarChart2,
   ExternalLink, RefreshCw, Search, ChevronDown, ChevronUp,
   Calendar, Globe, MessageSquare, Star, Zap, Target,
-  CheckCircle, XCircle, AlertTriangle, Loader, Database
+  CheckCircle, XCircle, AlertTriangle, Loader, Database,
+  GitBranch, DollarSign, Layers
 } from 'lucide-react';
 
 const API = '/api/market';
@@ -543,11 +545,252 @@ function AudienceTab({ industry, problem, onSaved }) {
   );
 }
 
+// ─── Investment Insights Section (used inside ValidationTab) ─────────────────
+function InvestmentInsightsSection({ industry, problem, insights, insLoading, insError,
+  expandedOpp, setExpandedOpp, onFetch, onSaved }) {
+
+  const confColor = { high: '#39ff14', medium: '#ffdf00', low: '#ff6b6b' };
+  const compColor = { none: '#39ff14', low: '#39ff14', medium: '#ffdf00', high: '#ff6b6b' };
+  const rankColors = ['var(--gold-primary)', '#5ac8fa', '#39ff14', '#ffdf00', '#ff6b6b', '#a0a0a0'];
+
+  return (
+    <div className="mr-card" style={{ borderTop: '3px solid var(--gold-primary)' }}>
+      <div className="mr-card-header" style={{ marginBottom: '0.5rem' }}>
+        <Lightbulb size={16} style={{ color: 'var(--gold-primary)' }} />
+        <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Where to Invest — AI Opportunity Analysis</span>
+        <span className="mr-source-chip">NVIDIA AI</span>
+      </div>
+      <p style={{ margin: '0 0 1rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+        Reads all collected research (pain points, Reddit comments, competitor gaps, pricing signals) and ranks specific investment opportunities with evidence and sources.
+        Run more tabs first for richer analysis.
+      </p>
+
+      {!insights && !insLoading && !insError && (
+        <button onClick={onFetch} style={{ width: 'auto', padding: '0.75rem 1.75rem',
+          marginBottom: 0, display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.88rem' }}>
+          <Lightbulb size={16} /> Generate Investment Insights
+        </button>
+      )}
+
+      {insLoading && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '1rem 0',
+          color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+          <Loader size={20} style={{ color: 'var(--gold-primary)', animation: 'spin 1s linear infinite' }} />
+          Analyzing all research data — reading pain clusters, Reddit comments, competitor gaps, pricing signals...
+        </div>
+      )}
+
+      {insError && (
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)',
+          borderRadius: '8px', padding: '0.875rem', color: '#ff6b6b', fontSize: '0.85rem' }}>
+          {insError}
+        </div>
+      )}
+
+      {insights && !insLoading && (() => {
+        const { insights: ins, data_richness, pain_clusters_used } = insights;
+        const opps = ins?.opportunities || [];
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* Data richness */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '0.75rem',
+              background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', alignSelf: 'center' }}>Data used:</span>
+              {[
+                { key: 'has_pain_data',      label: `${pain_clusters_used} pain clusters` },
+                { key: 'has_deep_reddit',    label: 'Reddit comments' },
+                { key: 'has_competitor_data',label: 'Competitor gaps' },
+                { key: 'has_pricing_data',   label: 'Pricing signals' },
+                { key: 'has_trend_data',     label: 'Trend data' },
+              ].map(({ key, label }) => (
+                <span key={key} style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '4px',
+                  background: data_richness?.[key] ? 'rgba(57,255,20,0.1)' : 'rgba(255,255,255,0.04)',
+                  color: data_richness?.[key] ? '#39ff14' : 'var(--text-muted)',
+                  border: `1px solid ${data_richness?.[key] ? 'rgba(57,255,20,0.3)' : 'rgba(255,255,255,0.08)'}` }}>
+                  {data_richness?.[key] ? '✓' : '○'} {label}
+                </span>
+              ))}
+              <button onClick={async () => {
+                  try { await axios.post(`${API}/refresh/invest`, { industry, problem }); } catch {}
+                  onFetch();
+                }}
+                style={{ all: 'unset', cursor: 'pointer', marginLeft: 'auto', fontSize: '0.72rem',
+                  color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <RefreshCw size={11} /> Re-run
+              </button>
+            </div>
+
+            {/* Executive summary */}
+            {ins?.executive_summary && (
+              <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-main)', lineHeight: 1.8,
+                padding: '1rem', background: 'rgba(212,175,55,0.05)',
+                borderRadius: '8px', border: '1px solid rgba(212,175,55,0.1)' }}>
+                {ins.executive_summary}
+              </p>
+            )}
+
+            {/* Quick win + biggest risk */}
+            {(ins?.quick_win || ins?.biggest_risk) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                {ins?.quick_win && (
+                  <div style={{ background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.2)',
+                    borderRadius: '8px', padding: '0.875rem' }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#39ff14',
+                      textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>⚡ Quick Win</div>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.6 }}>{ins.quick_win}</p>
+                  </div>
+                )}
+                {ins?.biggest_risk && (
+                  <div style={{ background: 'rgba(255,107,107,0.06)', border: '1px solid rgba(255,107,107,0.2)',
+                    borderRadius: '8px', padding: '0.875rem' }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ff6b6b',
+                      textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>⚠️ Biggest Risk</div>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.6 }}>{ins.biggest_risk}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {opps.length === 0 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                No opportunities generated — run Pain Points, Deep Reddit, and Competitor Reviews tabs first for richer analysis.
+              </div>
+            )}
+
+            {/* Opportunity cards */}
+            {opps.map((opp, i) => {
+              const isExp = expandedOpp[i];
+              const cc = confColor[opp.confidence?.toLowerCase()] || 'var(--text-muted)';
+              const compC = compColor[opp.competition_level?.toLowerCase()] || 'var(--text-muted)';
+              const rankColor = rankColors[i] || 'var(--text-muted)';
+              return (
+                <div key={i} className="mr-card" style={{ borderLeft: `4px solid ${rankColor}`,
+                  background: i === 0 ? 'rgba(212,175,55,0.04)' : 'var(--bg-card)' }}>
+                  {/* Header */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', cursor: 'pointer' }}
+                    onClick={() => setExpandedOpp(p => ({ ...p, [i]: !p[i] }))}>
+                    <div style={{ flexShrink: 0, width: '36px', height: '36px', borderRadius: '50%',
+                      background: `${rankColor}20`, border: `2px solid ${rankColor}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.88rem', fontWeight: 700, color: rankColor }}>
+                      #{opp.rank || i + 1}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
+                        <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-main)' }}>{opp.title}</span>
+                        {i === 0 && <span style={{ background: 'rgba(212,175,55,0.15)', color: 'var(--gold-primary)',
+                          border: '1px solid rgba(212,175,55,0.3)', borderRadius: '20px',
+                          padding: '1px 8px', fontSize: '0.68rem', fontWeight: 700 }}>🏆 Top Pick</span>}
+                        <span style={{ background: `${cc}15`, color: cc, border: `1px solid ${cc}33`,
+                          borderRadius: '4px', padding: '1px 8px', fontSize: '0.68rem', fontWeight: 600 }}>
+                          {opp.confidence || '—'} confidence
+                        </span>
+                        <span style={{ background: `${compC}15`, color: compC, border: `1px solid ${compC}33`,
+                          borderRadius: '4px', padding: '1px 8px', fontSize: '0.68rem', fontWeight: 600 }}>
+                          {opp.competition_level || '—'} competition
+                        </span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                        {opp.problem_statement}
+                      </p>
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+                      {isExp ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </div>
+                  </div>
+
+                  {/* Expanded */}
+                  {isExp && (
+                    <div style={{ marginTop: '1rem', paddingTop: '1rem',
+                      borderTop: '1px solid rgba(255,255,255,0.05)',
+                      display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {opp.why_now && (
+                        <div>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--gold-primary)',
+                            textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Why Now</div>
+                          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.6 }}>{opp.why_now}</p>
+                        </div>
+                      )}
+                      {opp.evidence?.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#5ac8fa',
+                            textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Evidence</div>
+                          {opp.evidence.map((e, ei) => (
+                            <div key={ei} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '4px' }}>
+                              <span style={{ color: '#5ac8fa', flexShrink: 0 }}>→</span>
+                              <span style={{ fontSize: '0.83rem', color: 'var(--text-main)', lineHeight: 1.5 }}>{e}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        {opp.target_user && (
+                          <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '0.75rem' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)',
+                              textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Target User</div>
+                            <p style={{ margin: 0, fontSize: '0.83rem', color: 'var(--text-main)' }}>{opp.target_user}</p>
+                          </div>
+                        )}
+                        {opp.monetization && (
+                          <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '0.75rem' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)',
+                              textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Monetization</div>
+                            <p style={{ margin: 0, fontSize: '0.83rem', color: 'var(--text-main)' }}>{opp.monetization}</p>
+                          </div>
+                        )}
+                      </div>
+                      {opp.source_items?.length > 0 && opp.source_items.map((si, sii) => si.quote && (
+                        <div key={sii} style={{ background: 'rgba(0,0,0,0.25)', borderRadius: '6px',
+                          padding: '0.75rem', border: '1px solid rgba(255,255,255,0.04)' }}>
+                          <p style={{ margin: '0 0 6px', fontSize: '0.82rem', color: 'var(--text-main)',
+                            lineHeight: 1.5, fontStyle: 'italic' }}>"{si.quote}"</p>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)',
+                              background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)',
+                              borderRadius: '4px', padding: '2px 8px' }}>{si.source}</span>
+                            <span style={{ fontSize: '0.7rem', color: '#ff6314' }}>{si.mentions} mentions</span>
+                            {si.url && (
+                              <a href={si.url} target="_blank" rel="noopener noreferrer"
+                                style={{ fontSize: '0.7rem', color: 'var(--gold-primary)',
+                                  display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}
+                                onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'}
+                                onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>
+                                <ExternalLink size={10} /> View Source
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {opp.sources?.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {opp.sources.map((s, si) => (
+                            <span key={si} style={{ fontSize: '0.7rem', color: 'var(--text-muted)',
+                              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                              borderRadius: '4px', padding: '2px 8px' }}>{s}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 // ─── Tab 5: Validation Score ──────────────────────────────────────────────────
 function ValidationTab({ industry, problem, onSaved }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [data, setData]               = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
+  const [insights, setInsights]       = useState(null);
+  const [insLoading, setInsLoading]   = useState(false);
+  const [insError, setInsError]       = useState('');
+  const [expandedOpp, setExpandedOpp] = useState({});
 
   const fetch = useCallback(async () => {
     if (!industry) return;
@@ -561,6 +804,18 @@ function ValidationTab({ industry, problem, onSaved }) {
     } finally { setLoading(false); }
   }, [industry, problem, onSaved]);
 
+  const fetchInsights = useCallback(async () => {
+    if (!industry) return;
+    setInsLoading(true); setInsError(''); setInsights(null);
+    try {
+      const res = await axios.post(`${API}/investment-insights`, { industry, problem });
+      setInsights(res.data);
+      if (onSaved) onSaved();
+    } catch (e) {
+      setInsError(e.response?.data?.detail || 'Failed to generate investment insights');
+    } finally { setInsLoading(false); }
+  }, [industry, problem, onSaved]);
+
   React.useEffect(() => { if (industry) fetch(); }, [fetch]);
 
   if (loading) return <LoadingSpinner message="Running NVIDIA AI validation analysis across all data sources..." />;
@@ -570,11 +825,13 @@ function ValidationTab({ industry, problem, onSaved }) {
   const { scores, data_sources_used } = data;
   const rec = scores?.recommendation || 'research more';
   const recConfig = {
-    pursue: { icon: CheckCircle, color: '#39ff14', bg: 'rgba(57,255,20,0.1)', border: 'rgba(57,255,20,0.3)', label: '✅ Pursue This Market' },
-    'research more': { icon: AlertTriangle, color: '#ffdf00', bg: 'rgba(255,223,0,0.1)', border: 'rgba(255,223,0,0.3)', label: '⚠️ Research More' },
-    avoid: { icon: XCircle, color: '#ff6b6b', bg: 'rgba(255,107,107,0.1)', border: 'rgba(255,107,107,0.3)', label: '❌ Avoid This Market' },
+    pursue:          { color: '#39ff14', bg: 'rgba(57,255,20,0.1)',   border: 'rgba(57,255,20,0.3)',   label: '✅ Pursue This Market' },
+    'research more': { color: '#ffdf00', bg: 'rgba(255,223,0,0.1)',   border: 'rgba(255,223,0,0.3)',   label: '⚠️ Research More' },
+    avoid:           { color: '#ff6b6b', bg: 'rgba(255,107,107,0.1)', border: 'rgba(255,107,107,0.3)', label: '❌ Avoid This Market' },
   };
   const rc = recConfig[rec] || recConfig['research more'];
+  const confColor = { high: '#39ff14', medium: '#ffdf00', low: '#ff6b6b' };
+  const compColor = { none: '#39ff14', low: '#39ff14', medium: '#ffdf00', high: '#ff6b6b' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -596,10 +853,10 @@ function ValidationTab({ industry, problem, onSaved }) {
 
       {/* Score explanations */}
       {[
-        { key: 'pain_intensity', label: 'Pain Intensity', color: '#ff6b6b' },
-        { key: 'market_size', label: 'Market Size', color: 'var(--gold-primary)' },
-        { key: 'competition_density', label: 'Competition Density', color: '#007aff' },
-        { key: 'overall_opportunity', label: 'Overall Opportunity', color: '#39ff14' },
+        { key: 'pain_intensity',    label: 'Pain Intensity',    color: '#ff6b6b' },
+        { key: 'market_size',       label: 'Market Size',       color: 'var(--gold-primary)' },
+        { key: 'competition_density',label:'Competition Density',color: '#007aff' },
+        { key: 'overall_opportunity',label:'Overall Opportunity',color: '#39ff14' },
       ].map(({ key, label, color }) => scores?.[key] && (
         <div key={key} className="mr-card" style={{ borderLeft: `3px solid ${color}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -607,12 +864,8 @@ function ValidationTab({ industry, problem, onSaved }) {
               {scores[key].score}/10
             </span>
             <div>
-              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                {label}
-              </div>
-              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                {scores[key].explanation}
-              </p>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{label}</div>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>{scores[key].explanation}</p>
             </div>
           </div>
         </div>
@@ -634,13 +887,19 @@ function ValidationTab({ industry, problem, onSaved }) {
 
       {/* Recommendation */}
       <div style={{ background: rc.bg, border: `1px solid ${rc.border}`, borderRadius: '10px', padding: '1.25rem 1.5rem' }}>
-        <div style={{ fontSize: '1.1rem', fontWeight: 700, color: rc.color, marginBottom: '8px' }}>
-          {rc.label}
-        </div>
+        <div style={{ fontSize: '1.1rem', fontWeight: 700, color: rc.color, marginBottom: '8px' }}>{rc.label}</div>
         <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--text-main)', lineHeight: 1.6 }}>
           {scores?.recommendation_reason}
         </p>
       </div>
+
+      {/* ── Investment Insights ─────────────────────────────────────────── */}
+      <InvestmentInsightsSection
+        industry={industry} problem={problem}
+        insights={insights} insLoading={insLoading} insError={insError}
+        expandedOpp={expandedOpp} setExpandedOpp={setExpandedOpp}
+        onFetch={fetchInsights} onSaved={onSaved}
+      />
 
       {/* Data sources used */}
       <div className="mr-card">
@@ -653,9 +912,7 @@ function ValidationTab({ industry, problem, onSaved }) {
             <div key={k} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)',
               borderRadius: '6px', padding: '6px 14px', fontSize: '0.8rem' }}>
               <span style={{ color: 'var(--gold-primary)', fontWeight: 700 }}>{v}</span>
-              <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
-                {k.replace(/_/g, ' ')}
-              </span>
+              <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>{k.replace(/_/g, ' ')}</span>
             </div>
           ))}
         </div>
@@ -673,11 +930,15 @@ const TAB_LABELS = {
   validation: 'Validation Score',
 };
 const TAB_ICONS = {
-  pain:       AlertCircle,
-  overview:   TrendingUp,
-  opp:        Lightbulb,
-  audience:   Users,
-  validation: BarChart2,
+  pain:            AlertCircle,
+  overview:        TrendingUp,
+  opp:             Lightbulb,
+  audience:        Users,
+  validation:      BarChart2,
+  deep_reddit:     MessageSquare,
+  competitors:     GitBranch,
+  pricing:         DollarSign,
+  deep_validation: Layers,
 };
 
 function SavedSearchesPanel({ onLoad, currentIndustry, currentProblem, refreshRef }) {
@@ -833,11 +1094,15 @@ function SavedSearchesPanel({ onLoad, currentIndustry, currentProblem, refreshRe
   );
 }
 const MR_TABS = [
-  { id: 'overview',     label: 'Market Overview',      icon: TrendingUp },
-  { id: 'pain-points',  label: 'Pain Points',           icon: AlertCircle },
-  { id: 'opportunities',label: 'Opportunities',         icon: Lightbulb },
-  { id: 'audience',     label: 'Audience Intelligence', icon: Users },
-  { id: 'validation',   label: 'Validation Score',      icon: BarChart2 },
+  { id: 'overview',      label: 'Market Overview',       icon: TrendingUp },
+  { id: 'pain-points',   label: 'Pain Points',            icon: AlertCircle },
+  { id: 'opportunities', label: 'Opportunities',          icon: Lightbulb },
+  { id: 'audience',      label: 'Audience Intel',         icon: Users },
+  { id: 'deep-reddit',   label: 'Deep Reddit',            icon: MessageSquare },
+  { id: 'competitors',   label: 'Competitor Reviews',     icon: GitBranch },
+  { id: 'pricing',       label: 'Willingness to Pay',     icon: DollarSign },
+  { id: 'validation',    label: 'Validation Score',       icon: BarChart2 },
+  { id: 'deep-validation', label: 'Deep Analysis ✦',     icon: Layers },
 ];
 
 export default function MarketResearch() {
@@ -859,7 +1124,9 @@ export default function MarketResearch() {
     setProblem(savedProblem || '');
     setSubmitted({ industry: savedIndustry, problem: savedProblem || '' });
     const tabMap = { pain: 'pain-points', overview: 'overview', opp: 'opportunities',
-                     audience: 'audience', validation: 'validation' };
+                     audience: 'audience', validation: 'validation',
+                     deep_reddit: 'deep-reddit', competitors: 'competitors',
+                     pricing: 'pricing', deep_validation: 'deep-validation' };
     setActiveTab(tabMap[savedTab] || savedTab);
   };
 
@@ -952,11 +1219,15 @@ export default function MarketResearch() {
           <EmptyState icon={Search} message="Enter an industry above and click Analyze Market to get started." />
         ) : (
           <>
-            {activeTab === 'overview'      && <MarketOverviewTab  industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
-            {activeTab === 'pain-points'   && <PainPointsTab      industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
-            {activeTab === 'opportunities' && <OpportunitiesTab   industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
-            {activeTab === 'audience'      && <AudienceTab        industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
-            {activeTab === 'validation'    && <ValidationTab      industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'overview'        && <MarketOverviewTab    industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'pain-points'     && <PainPointsTab        industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'opportunities'   && <OpportunitiesTab     industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'audience'        && <AudienceTab          industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'deep-reddit'     && <DeepRedditTab        industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'competitors'     && <CompetitorReviewsTab industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'pricing'         && <PricingSignalsTab    industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'validation'      && <ValidationTab        industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
+            {activeTab === 'deep-validation' && <DeepValidationTab    industry={submitted.industry} problem={submitted.problem} onSaved={notifySaved} />}
           </>
         )}
       </div>
