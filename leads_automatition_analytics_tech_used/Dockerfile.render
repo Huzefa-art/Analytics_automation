@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Only copy what's needed for cloud deployment
+COPY requirements-deploy.txt .
+RUN pip install --no-cache-dir -r requirements-deploy.txt
+
+COPY api_cloud.py .
+COPY market_research.py .
+COPY db_manager.py .
+
+# Create data directory for SQLite
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+CMD ["python", "api_cloud.py"]
