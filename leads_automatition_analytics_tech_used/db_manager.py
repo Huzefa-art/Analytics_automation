@@ -20,7 +20,12 @@ def _use_postgres():
 def get_pg_conn():
     import psycopg2
     import psycopg2.extras
-    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    # Add sslmode to URL if not already present
+    url = DATABASE_URL
+    if "sslmode" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    conn = psycopg2.connect(url)
     return conn
 
 def get_db_connection():
@@ -83,7 +88,13 @@ CREATE TABLE IF NOT EXISTS market_research_cache (
 
 def init_db():
     if _use_postgres():
-        _init_pg()
+        try:
+            _init_pg()
+        except Exception as e:
+            print(f"PostgreSQL init failed ({e}), falling back to SQLite")
+            import os
+            os.environ["DATABASE_URL"] = ""  # disable PG so SQLite is used
+            _init_sqlite()
     else:
         _init_sqlite()
 
