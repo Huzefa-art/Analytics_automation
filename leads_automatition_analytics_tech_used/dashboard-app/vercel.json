@@ -5,7 +5,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://antigravity-analytics-api.onrender.com/:path*"
+      "destination": "https://analytics-automation-2.onrender.com/:path*"
     }
   ],
   "headers": [
