@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import pandas as pd
 import re
 
 DB_PATH = os.getenv("DB_PATH", "leads.db")
@@ -80,6 +79,7 @@ def init_db():
     if row["count"] == 0 and os.path.exists(CSV_PATH):
         print("leads.db is currently empty. Starting automatic migration from results.csv...")
         try:
+            import pandas as pd
             df = pd.read_csv(CSV_PATH)
             # Ensure all needed columns are present
             for col in CSV_TO_DB_MAP.keys():

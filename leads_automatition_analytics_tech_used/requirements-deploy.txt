@@ -1,12 +1,7 @@
-# Production requirements — Playwright stripped out (too large for Render free tier).
-# Google Maps scraping (maps_leads_scraper.py) is disabled in cloud deployment.
-# All market research features work fully without Playwright.
+# Production requirements for Render free tier.
+# pandas and Playwright removed — not needed for cloud API.
 requests==2.31.0
 beautifulsoup4==4.12.3
-openpyxl==3.1.2
-urllib3==2.2.1
-pandas==2.2.1
-numpy==1.26.4
 python-dotenv==1.0.1
 fastapi==0.110.0
 uvicorn==0.28.0

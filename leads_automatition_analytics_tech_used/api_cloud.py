@@ -7,13 +7,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-import asyncio
-import pandas as pd
-import urllib.parse
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 import requests as _requests
 
 import db_manager
