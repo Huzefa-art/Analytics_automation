@@ -5,8 +5,8 @@
 [AI MODEL NOTE: Always read this file first on startup to understand the current 
  development progress, active configuration, and pending roadmap items!]
 
-Last Updated: 2026-05-29 (10:35 PM Local Time)
-Current Version Status: v1.1.0-slack-integrated
+Last Updated: 2026-06-07 (03:07 PM Local Time)
+Current Version Status: v1.2.0-supabase-migrated
 Active Workspace: Huzefa-art/Analytics_automation
 
 --------------------------------------------------------------------------------
@@ -15,7 +15,7 @@ Active Workspace: Huzefa-art/Analytics_automation
 This platform is a high-fidelity visual leads intake and tech analytics manager.
 * Frontend: React (Vite, Axios, Lucide Icons) running on port 5173.
 * Backend: FastAPI (Python, Uvicorn, Playwright-stealth) running on port 8000.
-* Database: SQLite (leads.db) containing 145 scraped and analyzed leads.
+* Database: Supabase PostgreSQL (Production) with SQLite (local fallback) containing 145 migrated leads.
 * Tunnel: Secure HTTPS public link via localhost.run port-forwarding.
 
 --------------------------------------------------------------------------------
@@ -83,6 +83,13 @@ Date       | Author       | Files Affected      | Change Description & Status
            |              |                     | conversations.list so you can
            |              |                     | pass '#ai-analytics' directly.
            |              |                     | Syntax verified ✓
+-----------|--------------|---------------------|-------------------------------
+2026-06-07 | Antigravity  | migrate_to_supabase.py| Migrated 145 leads, 0 settings,
+           | (AI Agent)   | db_manager.py       | and 11 saved searches from SQLite
+           |              | .env                | to Supabase PostgreSQL. Installed
+           |              |                     | psycopg2-binary, and verified live
+           |              |                     | Vercel app connectivity and data
+           |              |                     | persistence.
 -----------|--------------|---------------------|------------------------------- 
            |              | maps_leads_scraper.py| and Meta ads portfolio audits 
            |              |                     | to detect CRM, CMS, and Pixels.
