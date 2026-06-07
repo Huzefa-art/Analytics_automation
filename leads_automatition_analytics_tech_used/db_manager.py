@@ -553,6 +553,71 @@ def update_lead_analysis(website, analysis_dict):
     finally:
         conn.close()
 
+def get_leads_for_outreach(industry=None, require_email=False, require_phone=False, no_ads=False, no_crm=False, no_live_chat=False, no_payments=False):
+    where_clauses = []
+    params = []
+    
+    if industry and industry.lower() != 'all':
+        where_clauses.append("LOWER(industry) LIKE %s" if _use_postgres() else "LOWER(industry) LIKE ?")
+        params.append(f"%{industry.lower()}%")
+        
+    if require_email:
+        where_clauses.append("email IS NOT NULL AND email != 'N/A' AND email != ''")
+        
+    if require_phone:
+        where_clauses.append("phone IS NOT NULL AND phone != 'N/A' AND phone != ''")
+        
+    if no_ads:
+        where_clauses.append("(ads_active = 'No' OR ads_active = 'N/A' OR ads_active IS NULL)")
+        
+    if no_crm:
+        where_clauses.append("(crm = 'N/A' OR crm = '[]' OR crm = '' OR crm IS NULL)")
+        
+    if no_live_chat:
+        where_clauses.append("(live_chat = 'N/A' OR live_chat = '[]' OR live_chat = '' OR live_chat IS NULL)")
+        
+    if no_payments:
+        where_clauses.append("(payments = 'N/A' OR payments = '[]' OR payments = '' OR payments IS NULL)")
+        
+    where_str = ""
+    if where_clauses:
+        where_str = "WHERE " + " AND ".join(where_clauses)
+        
+    query = f"SELECT * FROM leads {where_str} ORDER BY id DESC"
+    
+    if _use_postgres():
+        conn = get_pg_conn()
+        try:
+            import psycopg2.extras
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            return [{DB_TO_CSV_MAP.get(k, k): v for k, v in dict(r).items()
+                     if k in DB_TO_CSV_MAP} for r in rows]
+        except Exception as e:
+            print(f"PG get_leads_for_outreach error: {e}")
+            return []
+        finally:
+            conn.close()
+    else:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            sqlite_query = query.replace("%s", "?")
+            cur.execute(sqlite_query, params)
+            rows = cur.fetchall()
+            leads = []
+            for row in rows:
+                lead = {DB_TO_CSV_MAP[col]: row[col]
+                        for col in DB_TO_CSV_MAP if col in row.keys()}
+                leads.append(lead)
+            return leads
+        except Exception as e:
+            print(f"SQLite get_leads_for_outreach error: {e}")
+            return []
+        finally:
+            conn.close()
+
 # ─── Auto-init on import ──────────────────────────────────────────────────────
 init_db()
 init_market_cache_table()

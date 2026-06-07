@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp, GitCompare } from 'lucide-react';
+import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp, GitCompare, Target } from 'lucide-react';
 import MarketResearch from './MarketResearch';
 import MarketComparison from './MarketComparison';
+import OutreachPlanner from './OutreachPlanner';
 
 const API_BASE = '/api';
 
@@ -376,6 +377,14 @@ function App() {
                     >
                         <GitCompare size={18} />
                         <span>Compare Markets</span>
+                    </button>
+
+                    <button 
+                        className={`sidebar-nav-item ${activeTab === 'outreach' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('outreach')}
+                    >
+                        <Target size={18} />
+                        <span>Outreach Campaign</span>
                     </button>
                 </nav>
 
@@ -921,6 +930,10 @@ function App() {
 
                 {activeTab === 'market-compare' && (
                     <MarketComparison />
+                )}
+
+                {activeTab === 'outreach' && (
+                    <OutreachPlanner />
                 )}
             </main>
 

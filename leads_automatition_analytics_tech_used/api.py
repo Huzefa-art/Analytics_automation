@@ -439,8 +439,166 @@ async def send_leads_to_slack(request: SlackRequest):
     else:
         raise HTTPException(status_code=400, detail="Please provide either a Slack Webhook URL or Bot Token")
 
+# ─── AI Outreach Campaign Endpoints ────────────────────────────────────────────
+
+class TargetRequest(BaseModel):
+    industry: Optional[str] = "all"
+    require_email: Optional[bool] = False
+    require_phone: Optional[bool] = False
+    no_ads: Optional[bool] = False
+    no_crm: Optional[bool] = False
+    no_live_chat: Optional[bool] = False
+    no_payments: Optional[bool] = False
+
+class OutreachGenerateRequest(BaseModel):
+    business_name: str
+    website: str
+    industry: str
+    tech_stack: dict
+    pain_point_theme: str
+    pain_point_description: str
+    user_offer: str
+
+class EmailSendRequest(BaseModel):
+    to_email: str
+    subject: str
+    body: str
+    business_name: str
+
+def make_pitch_prompt(business_name, website, tech_stack, pain_theme, pain_desc, user_offer):
+    tech_str = ", ".join(f"{k}: {v}" for k, v in tech_stack.items() if v and v != "N/A" and v != "[]")
+    if not tech_str:
+        tech_str = "No specific CRM, Live Chat, or advertising tools detected."
+        
+    prompt = f"""You are an expert cold outreach strategist. Your goal is to write a highly personalized, natural, and low-friction B2B cold email to a prospective client.
+
+Prospect details:
+- Business Name: {business_name}
+- Website: {website}
+- Industry: {business_name}'s category
+- Detected Tech Stack: {tech_str}
+
+Selected Industry Pain Point:
+- Theme: {pain_theme}
+- Description: {pain_desc}
+
+Our Offer / What We Do:
+{user_offer}
+
+Instructions:
+1. Write a compelling, conversational subject line that does not sound like spam.
+2. The opening should refer directly to their website or specific tech gaps (e.g. if they don't use Meta Ads or have no CRM, or use WordPress but have no online booking system).
+3. Connect their tech gap with the selected industry pain point (e.g., "We've noticed many business owners in your space are struggling with [pain point]...").
+4. Keep the email concise (under 150 words), professional, and conversational (use a warm, casual tone, avoiding overly salesy jargon).
+5. End with a low-friction Call to Action (CTA) asking for a quick 5-minute call.
+6. Do NOT include any placeholder text (like [Your Name] or [Your Company]). Use generic sign-offs or standard endings.
+
+Respond ONLY with a valid JSON object of this format (do not wrap it in ```json blocks):
+{{
+  "subject": "Email Subject Line",
+  "body": "Email Body Text"
+}}"""
+    return prompt
+
+@app.post("/outreach/targets")
+async def get_outreach_targets(request: TargetRequest):
+    try:
+        leads = db_manager.get_leads_for_outreach(
+            industry=request.industry,
+            require_email=request.require_email,
+            require_phone=request.require_phone,
+            no_ads=request.no_ads,
+            no_crm=request.no_crm,
+            no_live_chat=request.no_live_chat,
+            no_payments=request.no_payments
+        )
+        return leads
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/outreach/generate")
+async def generate_outreach_pitch(request: OutreachGenerateRequest):
+    from market_research import nvidia_chat
+    prompt = make_pitch_prompt(
+        business_name=request.business_name,
+        website=request.website,
+        tech_stack=request.tech_stack,
+        pain_theme=request.pain_point_theme,
+        pain_desc=request.pain_point_description,
+        user_offer=request.user_offer
+    )
+    
+    response = nvidia_chat(prompt, max_tokens=1000)
+    
+    import re
+    # Robust JSON extraction: find the first { ... } block anywhere in the response
+    try:
+        # 1. Strip markdown code fences if present
+        clean_resp = response.strip()
+        clean_resp = re.sub(r'^```(?:json)?\s*', '', clean_resp)
+        clean_resp = re.sub(r'\s*```$', '', clean_resp)
+        clean_resp = clean_resp.strip()
+        
+        # 2. Try direct parse first
+        try:
+            parsed = json.loads(clean_resp)
+            if "subject" in parsed and "body" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        
+        # 3. Extract JSON object from surrounding prose using regex
+        match = re.search(r'\{[\s\S]*\}', clean_resp)
+        if match:
+            parsed = json.loads(match.group())
+            if "subject" in parsed and "body" in parsed:
+                return parsed
+        
+        # 4. Fallback: treat the whole response as the email body
+        subject = f"Question about {request.business_name}'s web systems"
+        return {"subject": subject, "body": clean_resp}
+    except Exception:
+        subject = f"Question about {request.business_name}'s web systems"
+        return {"subject": subject, "body": response}
+
+@app.post("/outreach/send")
+async def send_outreach_email(request: EmailSendRequest):
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_pass = os.getenv("SMTP_PASS", "").strip()
+    from_email = os.getenv("FROM_EMAIL", smtp_user).strip()
+    
+    if not smtp_host or not smtp_user or not smtp_pass:
+        return {
+            "status": "mock",
+            "message": f"SMTP not configured in .env. Email simulated successfully to {request.to_email}."
+        }
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = from_email
+        msg['To'] = request.to_email
+        msg['Subject'] = request.subject
+        msg.attach(MIMEText(request.body, 'plain'))
+        
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_email, request.to_email, msg.as_string())
+        server.quit()
+        return {
+            "status": "success",
+            "message": f"Outreach email successfully sent to {request.to_email}!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email via SMTP: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
-    # Make sure DB is initialized on boot
     db_manager.init_db()
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -893,3 +893,21 @@ tr:hover {
     padding: 1rem;
   }
 }
+
+/* ─── Outreach Campaign Planner ───────────────────────────────────────────── */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Textarea focus glow (matches input focus) */
+textarea:focus {
+  border-color: var(--gold-primary) !important;
+  box-shadow: 0 0 10px var(--accent-glow) !important;
+}
+
+/* Make outreach grid stack on smaller screens */
+@media (max-width: 1024px) {
+  .main-content [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+}
