@@ -598,6 +598,93 @@ async def send_outreach_email(request: EmailSendRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send email via SMTP: {str(e)}")
 
+# ─── Signal Detection Plan Endpoint ────────────────────────────────────────────
+
+class SignalPlanRequest(BaseModel):
+    industry: str
+    pain_points: list  # list of { theme, description }
+
+def make_signal_plan_prompt(industry, pain_points):
+    pains_block = ""
+    for i, pp in enumerate(pain_points, 1):
+        pains_block += f"""
+{i}. PAIN POINT: {pp.get('theme', 'Unknown')}
+   Description: {pp.get('description', '')}
+"""
+
+    prompt = f"""You are a senior B2B market intelligence analyst specializing in the {industry} industry.
+
+Below are pain points discovered from Reddit, review sites, and web research about businesses in the {industry} industry:
+{pains_block}
+
+For EACH pain point above, produce a Signal Detection Plan. A signal is an externally visible, checkable indicator that proves a specific business is actually experiencing that pain point. Do NOT rely on assumptions — only observable facts.
+
+For each pain point, provide:
+1. SIGNAL — What observable thing externally proves a business suffers from this pain point?
+2. SOURCES — Where can this signal be found? Rank from easiest to hardest. Choose from: Google Maps listing, their own website, Google Reviews text, delivery platform listings (Uber Eats / DoorDash / JustEat), social media profiles, job listing portals (Indeed / LinkedIn Jobs), public financial filings, app store listings.
+3. HOW TO FIND — For each source, the EXACT method to detect the signal inside that source. Be precise. Not "check their website" but specific instructions like "look for an Order Online button in homepage navigation or hero section" or "search Google Reviews for keywords: wait, slow, delayed".
+4. CONFIRMED IF — A clear true/false boolean condition that definitively confirms the business has this problem.
+
+You may output multiple signals per pain point if appropriate.
+
+Respond ONLY with a valid JSON array. Do NOT wrap in markdown code fences. Use this exact structure:
+[
+  {{
+    "pain_point": "Theme name from above",
+    "signals": [
+      {{
+        "signal": "Description of the observable indicator",
+        "sources": [
+          {{
+            "name": "Source name (e.g. Google Reviews)",
+            "difficulty": "easy|medium|hard",
+            "how_to_find": "Exact step-by-step method to detect this signal in this source"
+          }}
+        ],
+        "confirmed_if": "Clear boolean condition e.g. 'No Order Online button found anywhere on homepage or navigation menu'"
+      }}
+    ]
+  }}
+]"""
+    return prompt
+
+@app.post("/outreach/signal-plan")
+async def generate_signal_plan(request: SignalPlanRequest):
+    from market_research import nvidia_chat
+    import re
+
+    if not request.pain_points:
+        raise HTTPException(status_code=400, detail="No pain points provided")
+
+    prompt = make_signal_plan_prompt(request.industry, request.pain_points)
+    response = nvidia_chat(prompt, max_tokens=4000)
+
+    try:
+        clean_resp = response.strip()
+        clean_resp = re.sub(r'^```(?:json)?\s*', '', clean_resp)
+        clean_resp = re.sub(r'\s*```$', '', clean_resp)
+        clean_resp = clean_resp.strip()
+
+        # Try direct parse
+        try:
+            parsed = json.loads(clean_resp)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+        # Extract JSON array from surrounding prose
+        match = re.search(r'\[[\s\S]*\]', clean_resp)
+        if match:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, list):
+                return parsed
+
+        # Fallback — return raw text as single entry
+        return [{"pain_point": "Signal Plan", "raw_text": clean_resp, "signals": []}]
+    except Exception:
+        return [{"pain_point": "Signal Plan", "raw_text": response, "signals": []}]
+
 if __name__ == "__main__":
     import uvicorn
     db_manager.init_db()

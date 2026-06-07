@@ -3,7 +3,8 @@ import axios from 'axios';
 import {
   Mail, Target, Sparkles, Send, Check, AlertCircle,
   RefreshCw, Filter, ExternalLink, FileText, ChevronRight,
-  Globe, MessageSquare, CreditCard, Play, Clipboard
+  Globe, MessageSquare, CreditCard, Play, Clipboard,
+  Radar, Eye, MapPin, Search, CheckCircle, ChevronDown, ChevronUp, Loader
 } from 'lucide-react';
 
 export default function OutreachPlanner() {
@@ -50,6 +51,12 @@ export default function OutreachPlanner() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
+
+  // Signal Detection Plan state
+  const [signalPlan, setSignalPlan] = useState([]);
+  const [loadingSignals, setLoadingSignals] = useState(false);
+  const [signalError, setSignalError] = useState('');
+  const [signalPlanOpen, setSignalPlanOpen] = useState(true);
 
   // Fetch saved searches on load
   const fetchSavedSearches = useCallback(async () => {
@@ -214,6 +221,30 @@ export default function OutreachPlanner() {
     }
   }, [selectedCampaign]);
 
+  // Auto-generate Signal Detection Plan when pain points load
+  useEffect(() => {
+    if (painPoints.length > 0 && selectedCampaign) {
+      const fetchSignalPlan = async () => {
+        setLoadingSignals(true);
+        setSignalError('');
+        setSignalPlan([]);
+        try {
+          const res = await axios.post('/api/outreach/signal-plan', {
+            industry: selectedCampaign.industry,
+            pain_points: painPoints.map(p => ({ theme: p.theme, description: p.description }))
+          });
+          setSignalPlan(res.data);
+        } catch (err) {
+          console.error(err);
+          setSignalError('Failed to generate Signal Detection Plan.');
+        } finally {
+          setLoadingSignals(false);
+        }
+      };
+      fetchSignalPlan();
+    }
+  }, [painPoints, selectedCampaign]);
+
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
       
@@ -282,6 +313,123 @@ export default function OutreachPlanner() {
           </div>
         </div>
       </div>
+
+      {/* ═══ SIGNAL DETECTION PLAN ═══════════════════════════════════════════ */}
+      {selectedCampaign && (
+        <div className="card" style={{ borderColor: 'rgba(138, 43, 226, 0.25)' }}>
+          <div 
+            onClick={() => setSignalPlanOpen(!signalPlanOpen)}
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
+          >
+            <h3 style={{ fontSize: '1.1rem', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Radar size={18} style={{ color: '#a78bfa' }} /> Signal Detection Plan
+              {loadingSignals && <Loader size={14} className="animate-spin" style={{ color: '#a78bfa', marginLeft: '6px' }} />}
+              {!loadingSignals && signalPlan.length > 0 && (
+                <span style={{ background: 'rgba(138,43,226,0.15)', color: '#a78bfa', fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', border: '1px solid rgba(138,43,226,0.3)' }}>
+                  {signalPlan.length} pain points mapped
+                </span>
+              )}
+            </h3>
+            {signalPlanOpen ? <ChevronUp size={18} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={18} style={{ color: 'var(--text-muted)' }} />}
+          </div>
+
+          {signalPlanOpen && (
+            <div style={{ marginTop: '1rem' }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1.25rem', lineHeight: 1.5 }}>
+                Auto-generated from your market research pain points. Each block maps an observable, externally-checkable signal to prove a specific business is experiencing that problem.
+              </p>
+
+              {signalError && (
+                <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.2)', padding: '0.75rem', borderRadius: '6px', color: '#ff6b6b', fontSize: '0.85rem', marginBottom: '1rem' }}>
+                  <AlertCircle size={14} style={{ marginRight: '6px' }} /> {signalError}
+                </div>
+              )}
+
+              {loadingSignals ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '3rem', gap: '1rem' }}>
+                  <Loader size={28} className="animate-spin" style={{ color: '#a78bfa' }} />
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Analyzing pain points with Llama LLM to build signal map...</span>
+                  <span style={{ color: 'rgba(167,139,250,0.6)', fontSize: '0.75rem' }}>This may take 15–30 seconds</span>
+                </div>
+              ) : signalPlan.length === 0 && !signalError ? (
+                <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem', fontSize: '0.85rem' }}>
+                  No signal plan yet. Load a campaign with pain points above.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  {signalPlan.map((block, bIdx) => (
+                    <div key={bIdx} style={{ background: 'rgba(138,43,226,0.04)', border: '1px solid rgba(138,43,226,0.15)', borderRadius: '10px', overflow: 'hidden' }}>
+                      {/* Pain Point Header */}
+                      <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid rgba(138,43,226,0.1)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AlertCircle size={15} style={{ color: '#f87171', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff' }}>PAIN POINT:</span>
+                        <span style={{ fontSize: '0.9rem', color: 'var(--gold-secondary)' }}>{block.pain_point}</span>
+                      </div>
+
+                      {/* Signals */}
+                      {block.raw_text && (!block.signals || block.signals.length === 0) ? (
+                        <div style={{ padding: '1rem', fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>{block.raw_text}</div>
+                      ) : (
+                        (block.signals || []).map((sig, sIdx) => (
+                          <div key={sIdx} style={{ padding: '0.85rem 1rem', borderBottom: sIdx < block.signals.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none' }}>
+                            {/* Signal */}
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', marginBottom: '0.6rem' }}>
+                              <Eye size={14} style={{ color: '#a78bfa', marginTop: '2px', flexShrink: 0 }} />
+                              <div>
+                                <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: '#a78bfa', fontWeight: 700, letterSpacing: '0.5px' }}>Signal</span>
+                                <div style={{ fontSize: '0.85rem', color: '#e0e0e0', marginTop: '2px' }}>{sig.signal}</div>
+                              </div>
+                            </div>
+
+                            {/* Sources with How To Find */}
+                            {sig.sources && sig.sources.length > 0 && (
+                              <div style={{ marginLeft: '22px', marginBottom: '0.6rem' }}>
+                                <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: '#60a5fa', fontWeight: 700, letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px' }}>
+                                  <MapPin size={11} /> Sources (easiest → hardest)
+                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  {sig.sources.map((src, srcIdx) => (
+                                    <div key={srcIdx} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>{src.name}</span>
+                                        <span style={{
+                                          fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '4px',
+                                          background: src.difficulty === 'easy' ? 'rgba(40,167,69,0.15)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.15)' : 'rgba(220,53,69,0.15)',
+                                          color: src.difficulty === 'easy' ? '#39ff14' : src.difficulty === 'medium' ? '#ffdf00' : '#ff6b6b',
+                                          border: `1px solid ${src.difficulty === 'easy' ? 'rgba(40,167,69,0.3)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.3)' : 'rgba(220,53,69,0.3)'}`
+                                        }}>{src.difficulty}</span>
+                                      </div>
+                                      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                                        <Search size={11} style={{ color: '#fbbf24', marginTop: '2px', flexShrink: 0 }} />
+                                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.how_to_find}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Confirmed If */}
+                            {sig.confirmed_if && (
+                              <div style={{ marginLeft: '22px', display: 'flex', gap: '6px', alignItems: 'flex-start', background: 'rgba(40,167,69,0.06)', border: '1px solid rgba(40,167,69,0.15)', borderRadius: '6px', padding: '0.45rem 0.65rem' }}>
+                                <CheckCircle size={13} style={{ color: '#39ff14', marginTop: '2px', flexShrink: 0 }} />
+                                <div>
+                                  <span style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: '#39ff14', fontWeight: 700, letterSpacing: '0.5px' }}>Confirmed if</span>
+                                  <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: '1px' }}>{sig.confirmed_if}</div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* WIZARD SPLIT COLUMNS LAYOUT */}
       {selectedCampaign && (
