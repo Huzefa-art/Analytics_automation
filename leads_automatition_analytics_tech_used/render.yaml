@@ -12,15 +12,11 @@ services:
         sync: false          # set manually in Render dashboard
       - key: serp_api
         sync: false          # set manually in Render dashboard
+      - key: DATABASE_URL
+        sync: false          # set manually in Render dashboard — Supabase PostgreSQL connection string
       - key: SLACK_WEBHOOK_URL
         sync: false
       - key: SLACK_BOT_TOKEN
         sync: false
       - key: SLACK_CHANNEL
         value: "ai-analytics"
-      - key: DB_PATH
-        value: "/app/data/leads.db"
-    disk:
-      name: leads-db
-      mountPath: /app/data
-      sizeGB: 1              # free tier allows 1GB persistent disk
