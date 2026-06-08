@@ -277,17 +277,36 @@ export default function OutreachPlanner() {
     setSignalError('');
     if (forceRefresh) setSignalPlan([]);
     try {
-      const res = await axios.post('/api/outreach/signal-plan', {
-        industry: selectedCampaign.industry,
-        pain_points: painPoints.map(p => ({ theme: p.theme, description: p.description })),
-        force_refresh: forceRefresh
-      });
-      setSignalPlan(res.data);
-      // If response came back fast (< 1s from cache) we can infer it was cached,
-      // but simpler: we track via a header or just mark based on force_refresh state
-      setSignalPlanFromCache(!forceRefresh);
-    } catch {
-      setSignalError('Failed to generate Signal Detection Plan.');
+      let result = null;
+
+      // 1. Try GET cache endpoint first (fastest — no body, pure cache lookup)
+      if (!forceRefresh) {
+        try {
+          const cached = await axios.get(`/api/outreach/signal-plan/${encodeURIComponent(selectedCampaign.industry)}`);
+          if (Array.isArray(cached.data) && cached.data.length > 0) {
+            result = cached.data;
+            setSignalPlanFromCache(true);
+          }
+        } catch {
+          // 404 = not cached yet, fall through to POST
+        }
+      }
+
+      // 2. If not cached (or force refresh), generate via POST
+      if (!result) {
+        const res = await axios.post('/api/outreach/signal-plan', {
+          industry: selectedCampaign.industry,
+          pain_points: painPoints.map(p => ({ theme: p.theme, description: p.description })),
+          force_refresh: forceRefresh
+        });
+        result = res.data;
+        setSignalPlanFromCache(false);
+      }
+
+      setSignalPlan(result);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Unknown error';
+      setSignalError(`Failed to generate Signal Detection Plan: ${detail}. Click Retry to try again.`);
     } finally {
       setLoadingSignals(false);
     }
@@ -484,8 +503,17 @@ export default function OutreachPlanner() {
               </p>
 
               {signalError && (
-                <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.2)', padding: '0.75rem', borderRadius: '6px', color: '#ff6b6b', fontSize: '0.85rem', marginBottom: '1rem' }}>
-                  <AlertCircle size={14} style={{ marginRight: '6px' }} />{signalError}
+                <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.2)', padding: '0.75rem 1rem', borderRadius: '6px', color: '#ff6b6b', fontSize: '0.85rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                    <AlertCircle size={14} style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <span>{signalError}</span>
+                  </div>
+                  <button
+                    onClick={() => fetchSignalPlan(true)}
+                    style={{ margin: 0, width: 'auto', padding: '4px 12px', fontSize: '0.78rem', background: 'rgba(220,53,69,0.15)', border: '1px solid rgba(220,53,69,0.4)', color: '#ff6b6b', borderRadius: '6px', flexShrink: 0, transform: 'none', boxShadow: 'none' }}
+                  >
+                    Retry
+                  </button>
                 </div>
               )}
 

@@ -605,11 +605,9 @@ class SignalPlanRequest(BaseModel):
     pain_points: list  # list of { theme, description }
     force_refresh: bool = False  # set True to bypass cache and regenerate
 
-def _signal_plan_cache_key(industry: str, pain_points: list) -> str:
-    """Stable cache key based on industry + sorted pain point themes."""
-    themes = sorted([pp.get('theme', '') for pp in pain_points])
-    raw = f"signal_plan:{industry.lower()}:{'|'.join(themes).lower()}"
-    return raw  # use as 'problem' field; db_manager hashes it internally
+def _signal_plan_cache_key(industry: str, pain_points: list = None) -> str:
+    """Cache key by industry only — one plan per industry, shared across all campaigns."""
+    return f"signal_plan:{industry.lower().strip()}"
 
 def make_signal_plan_prompt(industry, pain_points):
     pains_block = ""
@@ -705,36 +703,48 @@ async def generate_signal_plan(request: SignalPlanRequest):
             # cached is {"plan": [...]} — unwrap and return the list
             return cached.get("plan", cached) if isinstance(cached, dict) else cached
 
-    # ── Generate with LLM ────────────────────────────────────────────────────
-    prompt = make_signal_plan_prompt(request.industry, request.pain_points)
-    response = nvidia_chat(prompt, max_tokens=4000)
+    # ── Generate with LLM — batch 3 pain points at a time to avoid token limits ──
+    all_results = []
+    batch_size = 3
+    batches = [request.pain_points[i:i+batch_size] for i in range(0, len(request.pain_points), batch_size)]
 
-    result = None
-    try:
-        clean_resp = response.strip()
-        clean_resp = re.sub(r'^```(?:json)?\s*', '', clean_resp)
-        clean_resp = re.sub(r'\s*```$', '', clean_resp)
-        clean_resp = clean_resp.strip()
-
+    for batch in batches:
+        prompt = make_signal_plan_prompt(request.industry, batch)
+        response = nvidia_chat(prompt, max_tokens=4000)
+        batch_result = None
         try:
-            parsed = json.loads(clean_resp)
-            if isinstance(parsed, list):
-                result = parsed
-        except json.JSONDecodeError:
-            pass
+            clean_resp = response.strip()
+            clean_resp = re.sub(r'^```(?:json)?\s*', '', clean_resp)
+            clean_resp = re.sub(r'\s*```$', '', clean_resp)
+            clean_resp = clean_resp.strip()
 
-        if result is None:
-            match = re.search(r'\[[\s\S]*\]', clean_resp)
-            if match:
-                parsed = json.loads(match.group())
+            try:
+                parsed = json.loads(clean_resp)
                 if isinstance(parsed, list):
-                    result = parsed
+                    batch_result = parsed
+            except json.JSONDecodeError:
+                pass
 
-        if result is None:
-            result = [{"pain_point": "Signal Plan", "raw_text": clean_resp, "signals": []}]
+            if batch_result is None:
+                match = re.search(r'\[[\s\S]*\]', clean_resp)
+                if match:
+                    try:
+                        parsed = json.loads(match.group())
+                        if isinstance(parsed, list):
+                            batch_result = parsed
+                    except json.JSONDecodeError:
+                        pass
 
-    except Exception:
-        result = [{"pain_point": "Signal Plan", "raw_text": response, "signals": []}]
+            if not batch_result:
+                # Fallback placeholder for each pain point in this batch
+                batch_result = [{"pain_point": pp.get('theme', 'Unknown'), "brief": pp.get('description', ''), "signals": []} for pp in batch]
+
+        except Exception as e:
+            batch_result = [{"pain_point": pp.get('theme', 'Unknown'), "brief": pp.get('description', ''), "signals": []} for pp in batch]
+
+        all_results.extend(batch_result)
+
+    result = all_results
 
     # ── Save to Supabase ─────────────────────────────────────────────────────
     # Save as a dict wrapper so load_market_result can handle it (it expects a dict)
@@ -744,13 +754,12 @@ async def generate_signal_plan(request: SignalPlanRequest):
 
 
 @app.get("/outreach/signal-plan/{industry}")
-async def get_cached_signal_plan(industry: str, pain_themes: str = ""):
-    """Load a previously saved signal plan for an industry without regenerating."""
-    # pain_themes is a pipe-separated sorted list of theme names
-    cache_problem = f"signal_plan:{industry.lower()}:{pain_themes.lower()}"
+async def get_cached_signal_plan(industry: str):
+    """Load the saved signal plan for an industry without regenerating."""
+    cache_problem = _signal_plan_cache_key(industry)
     cached = db_manager.load_market_result("signal_plan", industry, cache_problem)
     if not cached:
-        raise HTTPException(status_code=404, detail="No saved signal plan for this campaign")
+        raise HTTPException(status_code=404, detail="No saved signal plan for this industry")
     return cached.get("plan", [])
 
 if __name__ == "__main__":
