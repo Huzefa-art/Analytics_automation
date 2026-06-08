@@ -603,6 +603,13 @@ async def send_outreach_email(request: EmailSendRequest):
 class SignalPlanRequest(BaseModel):
     industry: str
     pain_points: list  # list of { theme, description }
+    force_refresh: bool = False  # set True to bypass cache and regenerate
+
+def _signal_plan_cache_key(industry: str, pain_points: list) -> str:
+    """Stable cache key based on industry + sorted pain point themes."""
+    themes = sorted([pp.get('theme', '') for pp in pain_points])
+    raw = f"signal_plan:{industry.lower()}:{'|'.join(themes).lower()}"
+    return raw  # use as 'problem' field; db_manager hashes it internally
 
 def make_signal_plan_prompt(industry, pain_points):
     pains_block = ""
@@ -617,31 +624,64 @@ def make_signal_plan_prompt(industry, pain_points):
 Below are pain points discovered from Reddit, review sites, and web research about businesses in the {industry} industry:
 {pains_block}
 
-For EACH pain point above, produce a Signal Detection Plan. A signal is an externally visible, checkable indicator that proves a specific business is actually experiencing that pain point. Do NOT rely on assumptions — only observable facts.
+For EACH pain point above, produce a two-sided Signal Detection Plan.
 
-For each pain point, provide:
-1. SIGNAL — What observable thing externally proves a business suffers from this pain point?
-2. SOURCES — Where can this signal be found? Rank from easiest to hardest. Choose from: Google Maps listing, their own website, Google Reviews text, delivery platform listings (Uber Eats / DoorDash / JustEat), social media profiles, job listing portals (Indeed / LinkedIn Jobs), public financial filings, app store listings.
-3. HOW TO FIND — For each source, the EXACT method to detect the signal inside that source. Be precise. Not "check their website" but specific instructions like "look for an Order Online button in homepage navigation or hero section" or "search Google Reviews for keywords: wait, slow, delayed".
-4. CONFIRMED IF — A clear true/false boolean condition that definitively confirms the business has this problem.
+Each pain point block must include:
+- pain_point: the theme name
+- brief: A 2-3 sentence plain-English explanation written specifically for the {industry} industry. Explain: (1) what the problem actually is in real-world terms for a {industry} business, (2) WHY they are experiencing it, and (3) what they are LOSING because of it (revenue, customers, reputation etc). Be specific and vivid — not generic.
+- signals: the two-sided signal list (see below)
 
-You may output multiple signals per pain point if appropriate.
+SIDE 1 — Solution Gap Signals: Externally observable proof that the business does NOT already have a solution/fix in place.
+SIDE 2 — Problem Evidence Signals: Multiple externally observable signals proving the pain point actually EXISTS for this specific business.
+
+IMPORTANT RULES:
+- Only use signals that are publicly and externally visible — no internal systems, no internal data.
+- NEVER use: commission rates on delivery platforms, systems listed on Google Maps business profile, staff turnover rates from Indeed, internal POS data, or any internal analytics.
+- Valid sources ONLY: their own website, Google Maps listing, Google Reviews text, Facebook/Instagram page, LinkedIn jobs page, delivery platform public listings (Uber Eats/DoorDash public pages), app store public reviews.
+- For job listings: signal is "3 or more open job listings posted in last 30 days on LinkedIn or Indeed public search"
+- For Google Maps: only use signals visible on the public GMB card — phone, hours, reviews, website link, photos. NOT internal fields.
+- Each signal must have a weight (percentage) showing its contribution to the total confidence score (all weights within one pain point must sum to 100%).
+- Side 1 signals typically have higher individual weight (20-30%) since they confirm the gap exists.
+- Side 2 signals are cumulative evidence (10-20% each).
+
+For each signal provide:
+1. signal — what observable thing to check
+2. side — "solution_gap" (Side 1) or "problem_evidence" (Side 2)
+3. sources — list of sources with name, difficulty (easy/medium/hard), how_to_find (exact step-by-step)
+4. confirmed_if — clear true/false condition
+5. weight — integer percentage (all signals in pain point sum to 100)
 
 Respond ONLY with a valid JSON array. Do NOT wrap in markdown code fences. Use this exact structure:
 [
   {{
     "pain_point": "Theme name from above",
+    "brief": "2-3 sentence explanation of what this problem means for a {industry} business, why it happens, and what they are losing because of it.",
     "signals": [
       {{
-        "signal": "Description of the observable indicator",
+        "signal": "No online ordering or booking button on website",
+        "side": "solution_gap",
+        "weight": 25,
         "sources": [
           {{
-            "name": "Source name (e.g. Google Reviews)",
-            "difficulty": "easy|medium|hard",
-            "how_to_find": "Exact step-by-step method to detect this signal in this source"
+            "name": "Business website",
+            "difficulty": "easy",
+            "how_to_find": "Visit homepage and navigation menu. Look for any 'Order Online', 'Book a Table', 'Reserve', or 'Order Now' buttons or links. Also check footer and hero section."
           }}
         ],
-        "confirmed_if": "Clear boolean condition e.g. 'No Order Online button found anywhere on homepage or navigation menu'"
+        "confirmed_if": "No order/booking button or link found anywhere on homepage, navigation, or footer"
+      }},
+      {{
+        "signal": "Google Reviews mention slow response or wait times",
+        "side": "problem_evidence",
+        "weight": 20,
+        "sources": [
+          {{
+            "name": "Google Reviews",
+            "difficulty": "easy",
+            "how_to_find": "Search business on Google Maps. Open reviews. Filter by 'Lowest' rating (1-2 stars). Ctrl+F for keywords: wait, slow, delayed, response, hours, nobody answers, closed."
+          }}
+        ],
+        "confirmed_if": "At least 2 reviews in last 12 months mention wait time, slow service, or unresponsiveness"
       }}
     ]
   }}
@@ -656,34 +696,62 @@ async def generate_signal_plan(request: SignalPlanRequest):
     if not request.pain_points:
         raise HTTPException(status_code=400, detail="No pain points provided")
 
+    cache_problem = _signal_plan_cache_key(request.industry, request.pain_points)
+
+    # ── Check Supabase cache first (unless force_refresh) ────────────────────
+    if not request.force_refresh:
+        cached = db_manager.load_market_result("signal_plan", request.industry, cache_problem)
+        if cached:
+            # cached is {"plan": [...]} — unwrap and return the list
+            return cached.get("plan", cached) if isinstance(cached, dict) else cached
+
+    # ── Generate with LLM ────────────────────────────────────────────────────
     prompt = make_signal_plan_prompt(request.industry, request.pain_points)
     response = nvidia_chat(prompt, max_tokens=4000)
 
+    result = None
     try:
         clean_resp = response.strip()
         clean_resp = re.sub(r'^```(?:json)?\s*', '', clean_resp)
         clean_resp = re.sub(r'\s*```$', '', clean_resp)
         clean_resp = clean_resp.strip()
 
-        # Try direct parse
         try:
             parsed = json.loads(clean_resp)
             if isinstance(parsed, list):
-                return parsed
+                result = parsed
         except json.JSONDecodeError:
             pass
 
-        # Extract JSON array from surrounding prose
-        match = re.search(r'\[[\s\S]*\]', clean_resp)
-        if match:
-            parsed = json.loads(match.group())
-            if isinstance(parsed, list):
-                return parsed
+        if result is None:
+            match = re.search(r'\[[\s\S]*\]', clean_resp)
+            if match:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    result = parsed
 
-        # Fallback — return raw text as single entry
-        return [{"pain_point": "Signal Plan", "raw_text": clean_resp, "signals": []}]
+        if result is None:
+            result = [{"pain_point": "Signal Plan", "raw_text": clean_resp, "signals": []}]
+
     except Exception:
-        return [{"pain_point": "Signal Plan", "raw_text": response, "signals": []}]
+        result = [{"pain_point": "Signal Plan", "raw_text": response, "signals": []}]
+
+    # ── Save to Supabase ─────────────────────────────────────────────────────
+    # Save as a dict wrapper so load_market_result can handle it (it expects a dict)
+    db_manager.save_market_result("signal_plan", request.industry, cache_problem, {"plan": result})
+
+    return result
+
+
+@app.get("/outreach/signal-plan/{industry}")
+async def get_cached_signal_plan(industry: str, pain_themes: str = ""):
+    """Load a previously saved signal plan for an industry without regenerating."""
+    # pain_themes is a pipe-separated sorted list of theme names
+    cache_problem = f"signal_plan:{industry.lower()}:{pain_themes.lower()}"
+    cached = db_manager.load_market_result("signal_plan", industry, cache_problem)
+    if not cached:
+        raise HTTPException(status_code=404, detail="No saved signal plan for this campaign")
+    return cached.get("plan", [])
 
 if __name__ == "__main__":
     import uvicorn

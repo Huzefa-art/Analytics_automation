@@ -944,7 +944,7 @@ const TAB_ICONS = {
 function SavedSearchesPanel({ onLoad, currentIndustry, currentProblem, refreshRef }) {
   const [searches, setSearches] = useState([]);
   const [loading, setLoading]   = useState(false);
-  const [open, setOpen]         = useState(false);
+  const [open, setOpen]         = useState(true);  // start open so users see their saved searches
 
   const fetchSearches = async () => {
     setLoading(true);

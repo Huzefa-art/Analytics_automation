@@ -1518,29 +1518,17 @@ async def get_deep_validation(req: ResearchRequest):
 
 @router.get("/saved-searches")
 async def get_saved_searches():
-    """List all saved market research searches from SQLite."""
+    """List all saved market research searches from Supabase."""
     return _db.list_market_searches()
 
 
 @router.get("/saved-searches/{tab}/{cache_key}")
 async def load_saved_search(tab: str, cache_key: str):
     """Load a specific saved result by cache key."""
-    conn = _db.get_db_connection()
-    try:
-        _db.init_market_cache_table()
-        import sqlite3
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT result_json FROM market_research_cache WHERE cache_key = ?",
-            (cache_key,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Saved search not found")
-        import json
-        return json.loads(row["result_json"])
-    finally:
-        conn.close()
+    result = _db.load_market_result_by_key(cache_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    return result
 
 
 @router.delete("/saved-searches/{cache_key}")
@@ -1555,15 +1543,8 @@ async def delete_saved_search(cache_key: str):
 @router.delete("/saved-searches")
 async def clear_all_saved_searches():
     """Delete ALL saved market research results."""
-    conn = _db.get_db_connection()
-    try:
-        _db.init_market_cache_table()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM market_research_cache")
-        conn.commit()
-        return {"message": f"Cleared {cursor.rowcount} saved searches"}
-    finally:
-        conn.close()
+    count = _db.clear_all_market_results()
+    return {"message": f"Cleared {count} saved searches"}
 
 
 @router.post("/refresh/{tab}")
