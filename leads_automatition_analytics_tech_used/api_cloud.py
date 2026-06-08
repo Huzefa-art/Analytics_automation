@@ -168,9 +168,34 @@ For EACH pain point produce a two-sided Signal Detection Plan with:
 SIDE 1 (solution_gap): proof business has NO fix in place.
 SIDE 2 (problem_evidence): proof the pain EXISTS for this business.
 
-RULES: Only publicly visible signals. NO: commission rates, GMB internal fields, Indeed turnover rates, internal data.
-Valid sources: website, Google Maps public card, Google Reviews, Facebook/Instagram, LinkedIn Jobs public search, Uber Eats/DoorDash public pages.
-Each signal: weight integer % (all signals per pain point sum to 100).
+ALLOWED SOURCES — priority order (fastest first):
+1. Google Maps listing (public GMB card: phone, hours, review count, website link, photos, menu tab, Google Food Ordering panel)
+2. Google Search snippet (search "[business name] [keyword]", read snippet only without clicking)
+3. Business website (direct URL — homepage, navigation, footer, hero section)
+4. BuiltWith.com / Wappalyzer (free public tech lookup: CRM, live chat, ordering tech, analytics)
+5. Yelp public listing (hours, phone, reviews, amenities, booking links)
+6. TripAdvisor public page (reviews, reservation links, rating trends)
+7. OpenTable / Resy public listing (confirms if reservation system exists)
+8. Zomato public business page (menu, ordering availability)
+9. Indeed public job listings (indeed.com, no login needed)
+10. LinkedIn public job search (linkedin.com/jobs, no login needed)
+11. Trustpilot public page (review volume, rating trends, response rate)
+12. Google Jobs panel (search "jobs at [business name]" in Google SERP)
+13. Google News (search "[business name]" in Google News — funding, closures, expansions)
+14. Yellow Pages / Foursquare / Bark.com (public business profile)
+15. Glassdoor public job listings (basic search, no login)
+16. Similarweb public overview (traffic trends)
+
+FACEBOOK/INSTAGRAM RULE — requires login, DO NOT use directly:
+Use instead: Source "Google Search (social preview)" — how_to_find: 'Search Google for "[business name] facebook" or "[business name] instagram". Read ONLY the search snippet text. If snippet shows last post older than 30 days, no posts, or account not found — signal is confirmed.'
+
+BANNED: commission rates from delivery platforms, GMB internal fields, Indeed turnover rates, internal POS data, any login-required source.
+
+RULES:
+- All signal weights per pain point sum to 100%
+- Side 1 signals: 20-30% each. Side 2 signals: 10-20% each
+- Multiple sources per signal for cross-validation where possible
+- how_to_find must be exact step-by-step instructions
 
 Respond ONLY with valid JSON array, no markdown fences:
 [{{"pain_point":"...","brief":"...","signals":[{{"signal":"...","side":"solution_gap","weight":25,"sources":[{{"name":"...","difficulty":"easy","how_to_find":"..."}}],"confirmed_if":"..."}}]}}]"""

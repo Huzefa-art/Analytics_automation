@@ -626,60 +626,105 @@ For EACH pain point above, produce a two-sided Signal Detection Plan.
 
 Each pain point block must include:
 - pain_point: the theme name
-- brief: A 2-3 sentence plain-English explanation written specifically for the {industry} industry. Explain: (1) what the problem actually is in real-world terms for a {industry} business, (2) WHY they are experiencing it, and (3) what they are LOSING because of it (revenue, customers, reputation etc). Be specific and vivid — not generic.
-- signals: the two-sided signal list (see below)
+- brief: A 2-3 sentence plain-English explanation written specifically for the {industry} industry. Explain: (1) what the problem is in real-world terms, (2) WHY they experience it, and (3) what they are LOSING (revenue, customers, reputation). Be specific and vivid.
+- signals: the two-sided signal list
 
-SIDE 1 — Solution Gap Signals: Externally observable proof that the business does NOT already have a solution/fix in place.
-SIDE 2 — Problem Evidence Signals: Multiple externally observable signals proving the pain point actually EXISTS for this specific business.
+SIDE 1 — Solution Gap Signals: Externally observable proof the business has NO fix in place.
+SIDE 2 — Problem Evidence Signals: Multiple observable proofs the pain actually EXISTS for this business.
 
-IMPORTANT RULES:
-- Only use signals that are publicly and externally visible — no internal systems, no internal data.
-- NEVER use: commission rates on delivery platforms, systems listed on Google Maps business profile, staff turnover rates from Indeed, internal POS data, or any internal analytics.
-- Valid sources ONLY: their own website, Google Maps listing, Google Reviews text, Facebook/Instagram page, LinkedIn jobs page, delivery platform public listings (Uber Eats/DoorDash public pages), app store public reviews.
-- For job listings: signal is "3 or more open job listings posted in last 30 days on LinkedIn or Indeed public search"
-- For Google Maps: only use signals visible on the public GMB card — phone, hours, reviews, website link, photos. NOT internal fields.
-- Each signal must have a weight (percentage) showing its contribution to the total confidence score (all weights within one pain point must sum to 100%).
-- Side 1 signals typically have higher individual weight (20-30%) since they confirm the gap exists.
-- Side 2 signals are cumulative evidence (10-20% each).
+═══ ALLOWED SOURCES (public, no login required) ═══
+Use sources in this priority order (fastest → slowest to check):
+
+1. Google Maps listing — public GMB card: phone, hours, review count, website link, photos, menu tab, Google Food Ordering panel. DO NOT reference any internal GMB fields.
+2. Google Search snippet — search "[business name] [keyword]" and read the snippet only, without clicking through.
+3. Business website (direct URL) — homepage, navigation, footer, hero section.
+4. BuiltWith.com / Wappalyzer — free public tech lookup: shows CRM, live chat, ordering tech, analytics installed on website.
+5. Yelp public listing — shows hours, phone, website, reviews, amenities, booking links. No login needed.
+6. TripAdvisor public page — shows reviews, reservation links, rating trends.
+7. OpenTable / Resy public listing — shows if online reservation system exists.
+8. Zomato public business page — shows menu, ordering availability.
+9. Indeed public job listings — search "[business name]" on indeed.com, no login needed.
+10. LinkedIn public job search — linkedin.com/jobs public search, no login needed.
+11. Trustpilot public page — shows review volume, rating trends, response rate.
+12. Google Jobs panel — search "jobs at [business name]" in Google, shows hiring signals directly in SERP.
+13. Google News — search "[business name]" in Google News, reveals funding rounds, closures, expansions, press mentions.
+14. Yellow Pages / Foursquare / Bark.com — public business profile, shows contact info and service gaps.
+15. Glassdoor public job listings — basic job search visible without login.
+16. Similarweb public overview — shows traffic trends, channel breakdown.
+
+FACEBOOK / INSTAGRAM RULE: These require login — DO NOT use them as direct sources.
+Instead, use this approach for social signals:
+- Source name: "Google Search (social preview)"
+- how_to_find: 'Search Google for "[business name] facebook" or "[business name] instagram". Read ONLY the search snippet text that appears without clicking. If snippet shows last post date older than 30 days, no posts found, or account not found — signal is confirmed.'
+
+═══ BANNED SOURCES ═══
+NEVER use: commission rates from delivery platforms, GMB internal fields/systems, Indeed turnover rates, internal POS data, internal analytics, any source requiring login/authentication.
+
+═══ SIGNAL RULES ═══
+- Each signal has a weight (integer %) — all signals in one pain point sum to 100%.
+- Side 1 (solution_gap) signals: 20–30% weight each (confirm the gap exists).
+- Side 2 (problem_evidence) signals: 10–20% weight each (cumulative evidence).
+- Use multiple sources per signal where possible (cross-validation).
+- For each source give the EXACT step-by-step method — not "check their website" but specific instructions.
 
 For each signal provide:
-1. signal — what observable thing to check
-2. side — "solution_gap" (Side 1) or "problem_evidence" (Side 2)
-3. sources — list of sources with name, difficulty (easy/medium/hard), how_to_find (exact step-by-step)
-4. confirmed_if — clear true/false condition
-5. weight — integer percentage (all signals in pain point sum to 100)
+1. signal — what to check
+2. side — "solution_gap" or "problem_evidence"
+3. sources — list with name, difficulty (easy/medium/hard), how_to_find (exact steps)
+4. confirmed_if — clear true/false boolean condition
+5. weight — integer %
 
-Respond ONLY with a valid JSON array. Do NOT wrap in markdown code fences. Use this exact structure:
+Respond ONLY with a valid JSON array. No markdown fences. Structure:
 [
   {{
-    "pain_point": "Theme name from above",
-    "brief": "2-3 sentence explanation of what this problem means for a {industry} business, why it happens, and what they are losing because of it.",
+    "pain_point": "Theme name",
+    "brief": "2-3 sentences: what this means for a {industry} business, why it happens, what they lose.",
     "signals": [
       {{
-        "signal": "No online ordering or booking button on website",
+        "signal": "No online ordering button anywhere on website or Google Maps",
         "side": "solution_gap",
         "weight": 25,
         "sources": [
           {{
             "name": "Business website",
             "difficulty": "easy",
-            "how_to_find": "Visit homepage and navigation menu. Look for any 'Order Online', 'Book a Table', 'Reserve', or 'Order Now' buttons or links. Also check footer and hero section."
+            "how_to_find": "Visit homepage and all navigation links. Search for 'Order Online', 'Order Now', 'Book a Table', 'Reserve', 'Buy Now' buttons or links in header, hero, footer, and menu pages."
+          }},
+          {{
+            "name": "Google Maps listing",
+            "difficulty": "easy",
+            "how_to_find": "Search business on Google Maps. Check the business panel for an 'Order' or 'Reserve a table' button below the name. Also click Menu tab to see if a digital menu exists."
+          }},
+          {{
+            "name": "BuiltWith.com",
+            "difficulty": "easy",
+            "how_to_find": "Go to builtwith.com, enter the business website URL. Look under 'eCommerce' and 'CMS' sections for any ordering platform like Square Online, Toast, Shopify, OpenTable widget."
           }}
         ],
-        "confirmed_if": "No order/booking button or link found anywhere on homepage, navigation, or footer"
+        "confirmed_if": "No order/booking button found on website AND no Order/Reserve button on Google Maps panel AND BuiltWith shows no ordering platform installed"
       }},
       {{
-        "signal": "Google Reviews mention slow response or wait times",
+        "signal": "Google Reviews and Yelp reviews mention slow service, long waits, or unresponsiveness",
         "side": "problem_evidence",
-        "weight": 20,
+        "weight": 15,
         "sources": [
           {{
             "name": "Google Reviews",
             "difficulty": "easy",
-            "how_to_find": "Search business on Google Maps. Open reviews. Filter by 'Lowest' rating (1-2 stars). Ctrl+F for keywords: wait, slow, delayed, response, hours, nobody answers, closed."
+            "how_to_find": "Search business on Google Maps. Open reviews panel. Sort by 'Lowest' rating. Ctrl+F or manually scan for keywords: wait, slow, delayed, nobody answered, took too long, hours wrong, closed early."
+          }},
+          {{
+            "name": "Yelp public listing",
+            "difficulty": "easy",
+            "how_to_find": "Search business name on yelp.com. Open the listing. Sort reviews by 'Lowest Rated'. Scan review text for: wait time, slow, ignored, no response, understaffed."
+          }},
+          {{
+            "name": "TripAdvisor",
+            "difficulty": "easy",
+            "how_to_find": "Search business name on tripadvisor.com. Sort reviews by 'Terrible'. Scan for keywords: slow service, long wait, unresponsive staff, poor management."
           }}
         ],
-        "confirmed_if": "At least 2 reviews in last 12 months mention wait time, slow service, or unresponsiveness"
+        "confirmed_if": "At least 3 reviews across Google/Yelp/TripAdvisor in last 12 months mention wait times, slow service, or staff unresponsiveness"
       }}
     ]
   }}
