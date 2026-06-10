@@ -276,28 +276,34 @@ export default function OutreachPlanner() {
     setLoadingSignals(true);
     setSignalError('');
     if (forceRefresh) setSignalPlan([]);
+
+    // campaign_key ties this signal plan to the exact pain campaign loaded
+    const campaignKey = selectedCampaign.cache_key || '';
+
     try {
       let result = null;
 
       // 1. Try GET cache endpoint first (fastest — no body, pure cache lookup)
       if (!forceRefresh) {
         try {
-          const cached = await axios.get(`/api/outreach/signal-plan/${encodeURIComponent(selectedCampaign.industry)}`);
+          const url = `/api/outreach/signal-plan/${encodeURIComponent(selectedCampaign.industry)}?campaign_key=${encodeURIComponent(campaignKey)}`;
+          const cached = await axios.get(url);
           if (Array.isArray(cached.data) && cached.data.length > 0) {
             result = cached.data;
             setSignalPlanFromCache(true);
           }
         } catch {
-          // 404 = not cached yet, fall through to POST
+          // 404 or bad cache — fall through to POST
         }
       }
 
-      // 2. If not cached (or force refresh), generate via POST
+      // 2. Generate via POST (new generation or force refresh)
       if (!result) {
         const res = await axios.post('/api/outreach/signal-plan', {
           industry: selectedCampaign.industry,
           pain_points: painPoints.map(p => ({ theme: p.theme, description: p.description })),
-          force_refresh: forceRefresh
+          force_refresh: forceRefresh,
+          campaign_key: campaignKey
         });
         result = res.data;
         setSignalPlanFromCache(false);

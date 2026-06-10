@@ -131,13 +131,18 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   // Inputs
   const [technology, setTechnology] = useState('');
   const [industry, setIndustry] = useState('');
-  const [submitted, setSubmitted] = useState(null); // { technology, industry }
+  const [submitted, setSubmitted] = useState(null);
 
   // Generation state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [data, setData] = useState(null); // full LLM response
+  const [data, setData] = useState(null);
   const [fromCache, setFromCache] = useState(false);
+
+  // History panel
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Section open states
   const [sec1Open, setSec1Open] = useState(true);
@@ -162,6 +167,58 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   const [filterPainPoint, setFilterPainPoint] = useState('all');
   const [selectedLeads, setSelectedLeads] = useState(new Set());
 
+  // ── Load history from Supabase ────────────────────────────────────────────
+  const fetchHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await axios.get('/api/market/saved-searches');
+      const pi = (res.data || []).filter(x => x.tab === 'prospect_intel');
+      setHistory(pi);
+    } catch { /* silent */ }
+    finally { setLoadingHistory(false); }
+  }, []);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  // ── Load a saved history entry ────────────────────────────────────────────
+  const handleLoadHistory = async (entry) => {
+    setLoading(true);
+    setError('');
+    setData(null);
+    setScoredLeads([]);
+    setScrapeLeads([]);
+    try {
+      // Load via generate endpoint (will hit cache instantly)
+      // The problem field stores "prospect:{tech}:{industry}"
+      const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
+      const tech = parts[0] || entry.industry;
+      const ind  = parts[1] || '';
+      const sub = { technology: tech, industry: ind };
+      setSubmitted(sub);
+      setTechnology(tech);
+      setIndustry(ind);
+      const res = await axios.post('/api/prospect-intel/generate', { technology: tech, industry: ind });
+      setData(res.data);
+      setFromCache(true);
+      const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
+      if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to load saved run.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Delete a history entry ────────────────────────────────────────────────
+  const handleDeleteHistory = async (e, cacheKey) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete this saved run?')) return;
+    try {
+      await axios.delete(`/api/market/saved-searches/${cacheKey}`);
+      setHistory(h => h.filter(x => x.cache_key !== cacheKey));
+    } catch { alert('Failed to delete'); }
+  };
+
   // ── Generate / load from cache ───────────────────────────────────────────
   const handleGenerate = async (forceRefresh = false) => {
     if (!technology.trim()) return;
@@ -182,6 +239,9 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
       // Auto-set scrape keyword from primary source
       const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
       if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
+
+      // Refresh history panel so new entry appears
+      fetchHistory();
     } catch (err) {
       setError(err?.response?.data?.detail || err?.message || 'Failed to generate. Try again.');
     } finally {
@@ -288,6 +348,71 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
         <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
           Enter a technology or keyword → AI generates pain points, signal detection plan, and lead sources → scrape and score leads automatically.
         </p>
+      </div>
+
+      {/* HISTORY PANEL */}
+      <div className="card" style={{ padding: '0.85rem 1.1rem' }}>
+        <div onClick={() => setHistoryOpen(o => !o)}
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Database size={15} style={{ color: 'var(--gold-primary)' }} />
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--gold-primary)' }}>Saved Runs</span>
+            <span style={{ background: 'rgba(212,175,55,0.15)', color: 'var(--gold-primary)', fontSize: '0.7rem', fontWeight: 700, padding: '1px 8px', borderRadius: '20px', border: '1px solid rgba(212,175,55,0.3)' }}>
+              {history.length}
+            </span>
+            {loadingHistory && <Loader size={12} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={e => { e.stopPropagation(); fetchHistory(); }}
+              style={{ margin: 0, width: 'auto', padding: '2px 8px', fontSize: '0.7rem', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', transform: 'none', boxShadow: 'none' }}>
+              <RefreshCw size={10} />
+            </button>
+            {historyOpen ? <ChevronUp size={15} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={15} style={{ color: 'var(--text-muted)' }} />}
+          </div>
+        </div>
+
+        {historyOpen && (
+          <div style={{ marginTop: '0.75rem' }}>
+            {history.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
+                No saved runs yet. Generate your first intelligence report above.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {history.map((entry, i) => {
+                  const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
+                  const tech  = parts[0] || entry.industry;
+                  const ind   = parts[1] || '';
+                  const isActive = submitted?.technology === tech && submitted?.industry === ind;
+                  return (
+                    <div key={i}
+                      onClick={() => handleLoadHistory(entry)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        background: isActive ? 'rgba(212,175,55,0.12)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${isActive ? 'rgba(212,175,55,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                        borderRadius: '8px', padding: '5px 10px', cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}>
+                      <Zap size={11} style={{ color: isActive ? 'var(--gold-primary)' : '#a78bfa', flexShrink: 0 }} />
+                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isActive ? 'var(--gold-primary)' : '#fff' }}>
+                        {tech}
+                      </span>
+                      {ind && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>· {ind}</span>}
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                        {entry.saved_at?.slice(0, 10)}
+                      </span>
+                      <button
+                        onClick={e => handleDeleteHistory(e, entry.cache_key)}
+                        style={{ all: 'unset', cursor: 'pointer', color: 'rgba(255,107,107,0.4)', fontSize: '0.9rem', lineHeight: 1, padding: '0 2px' }}
+                        title="Delete">×</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* INPUT FORM */}

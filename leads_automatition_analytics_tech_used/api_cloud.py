@@ -132,8 +132,11 @@ class SignalPlanRequest(BaseModel):
     industry: str
     pain_points: list
     force_refresh: bool = False
+    campaign_key: str = ""
 
-def _signal_plan_cache_key(industry: str) -> str:
+def _signal_plan_cache_key(industry: str, pain_points: list = None, campaign_key: str = "") -> str:
+    if campaign_key:
+        return f"signal_plan:{industry.lower().strip()}:{campaign_key}"
     return f"signal_plan:{industry.lower().strip()}"
 
 def make_pitch_prompt(business_name, website, tech_stack, pain_theme, pain_desc, user_offer):
@@ -273,13 +276,17 @@ async def generate_signal_plan(request: SignalPlanRequest):
     if not request.pain_points:
         raise HTTPException(status_code=400, detail="No pain points provided")
 
-    cache_problem = _signal_plan_cache_key(request.industry)
+    cache_problem = _signal_plan_cache_key(request.industry, campaign_key=request.campaign_key)
 
-    # Check Supabase cache first
+    # Check Supabase cache — validate quality before returning
     if not request.force_refresh:
         cached = db_manager.load_market_result("signal_plan", request.industry, cache_problem)
         if cached:
-            return cached.get("plan", cached) if isinstance(cached, dict) else cached
+            plan = cached.get("plan", cached) if isinstance(cached, dict) else cached
+            if isinstance(plan, list) and plan:
+                empty_count = sum(1 for b in plan if not b.get("signals"))
+                if empty_count == 0:
+                    return plan  # good cache
 
     # Batch 3 pain points at a time to stay within token limits
     all_results = []
@@ -315,12 +322,17 @@ async def generate_signal_plan(request: SignalPlanRequest):
     return all_results
 
 @app.get("/outreach/signal-plan/{industry}")
-async def get_cached_signal_plan(industry: str):
-    cache_problem = _signal_plan_cache_key(industry)
+async def get_cached_signal_plan(industry: str, campaign_key: str = ""):
+    cache_problem = _signal_plan_cache_key(industry, campaign_key=campaign_key)
     cached = db_manager.load_market_result("signal_plan", industry, cache_problem)
     if not cached:
-        raise HTTPException(status_code=404, detail="No saved signal plan for this industry")
-    return cached.get("plan", [])
+        raise HTTPException(status_code=404, detail="No saved signal plan for this campaign")
+    plan = cached.get("plan", []) if isinstance(cached, dict) else cached
+    if isinstance(plan, list) and plan:
+        empty_count = sum(1 for b in plan if not b.get("signals"))
+        if empty_count > 0:
+            raise HTTPException(status_code=404, detail="Cached plan has empty signals — needs regeneration")
+    return plan
 
 @app.get("/health")
 async def health():

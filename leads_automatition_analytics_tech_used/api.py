@@ -602,11 +602,23 @@ async def send_outreach_email(request: EmailSendRequest):
 
 class SignalPlanRequest(BaseModel):
     industry: str
-    pain_points: list  # list of { theme, description }
-    force_refresh: bool = False  # set True to bypass cache and regenerate
+    pain_points: list
+    force_refresh: bool = False
+    campaign_key: str = ""   # pain tab cache_key — ties signal plan to specific campaign
 
-def _signal_plan_cache_key(industry: str, pain_points: list = None) -> str:
-    """Cache key by industry only — one plan per industry, shared across all campaigns."""
+def _signal_plan_cache_key(industry: str, pain_points: list = None, campaign_key: str = "") -> str:
+    """One signal plan per campaign (campaign_key), not per industry globally."""
+    if campaign_key:
+        return f"signal_plan:{industry.lower().strip()}:{campaign_key}"
+    return f"signal_plan:{industry.lower().strip()}"
+    campaign_key: str = ""  # MD5 cache_key of the pain tab entry for precise keying
+
+def _signal_plan_cache_key(industry: str, pain_points: list = None, campaign_key: str = "") -> str:
+    """Cache key: industry + campaign_key (MD5 of pain campaign) so each campaign has its own signal plan."""
+    # If we have a campaign_key (MD5 of the pain tab entry), use it for precise keying
+    if campaign_key:
+        return f"signal_plan:{industry.lower().strip()}:{campaign_key}"
+    # Fallback: industry only (used when no campaign context)
     return f"signal_plan:{industry.lower().strip()}"
 
 def make_signal_plan_prompt(industry, pain_points):
@@ -739,14 +751,19 @@ async def generate_signal_plan(request: SignalPlanRequest):
     if not request.pain_points:
         raise HTTPException(status_code=400, detail="No pain points provided")
 
-    cache_problem = _signal_plan_cache_key(request.industry, request.pain_points)
+    cache_problem = _signal_plan_cache_key(request.industry, request.pain_points, request.campaign_key)
 
-    # ── Check Supabase cache first (unless force_refresh) ────────────────────
+    # ── Check Supabase cache (skip if force_refresh) ──────────────────────────
     if not request.force_refresh:
         cached = db_manager.load_market_result("signal_plan", request.industry, cache_problem)
         if cached:
-            # cached is {"plan": [...]} — unwrap and return the list
-            return cached.get("plan", cached) if isinstance(cached, dict) else cached
+            plan = cached.get("plan", cached) if isinstance(cached, dict) else cached
+            if isinstance(plan, list) and plan:
+                # Validate quality — if any block has 0 signals, it's a bad cache → regenerate
+                empty_count = sum(1 for b in plan if not b.get("signals"))
+                if empty_count == 0:
+                    return plan  # ✓ good cache
+                # Bad cache detected — fall through to regenerate and overwrite
 
     # ── Generate with LLM — batch 3 pain points at a time to avoid token limits ──
     all_results = []
@@ -799,13 +816,19 @@ async def generate_signal_plan(request: SignalPlanRequest):
 
 
 @app.get("/outreach/signal-plan/{industry}")
-async def get_cached_signal_plan(industry: str):
-    """Load the saved signal plan for an industry without regenerating."""
-    cache_problem = _signal_plan_cache_key(industry)
+async def get_cached_signal_plan(industry: str, campaign_key: str = ""):
+    """Load saved signal plan — by campaign_key if provided, else by industry."""
+    cache_problem = _signal_plan_cache_key(industry, campaign_key=campaign_key)
     cached = db_manager.load_market_result("signal_plan", industry, cache_problem)
     if not cached:
-        raise HTTPException(status_code=404, detail="No saved signal plan for this industry")
-    return cached.get("plan", [])
+        raise HTTPException(status_code=404, detail="No saved signal plan for this campaign")
+    plan = cached.get("plan", []) if isinstance(cached, dict) else cached
+    # Validate quality before returning
+    if isinstance(plan, list) and plan:
+        empty_count = sum(1 for b in plan if not b.get("signals"))
+        if empty_count > 0:
+            raise HTTPException(status_code=404, detail="Cached plan has empty signals — needs regeneration")
+    return plan
 
 # ─── Prospect Intelligence Endpoint ───────────────────────────────────────────
 
