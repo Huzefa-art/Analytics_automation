@@ -1,0 +1,721 @@
+import React, { useState, useCallback, useRef } from 'react';
+import axios from 'axios';
+import {
+  Search, Zap, AlertCircle, Shield, Eye, CheckCircle, MapPin,
+  ChevronDown, ChevronUp, Loader, RefreshCw, Download, Send,
+  TrendingUp, Users, Target, Globe, Activity, Filter,
+  BarChart2, Layers, ExternalLink, Play, Database
+} from 'lucide-react';
+
+const API = '/api';
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+function getConfColor(score) {
+  if (score >= 81) return { bg: 'rgba(255,80,0,0.15)', border: 'rgba(255,80,0,0.4)', text: '#ff6020', label: 'HOT' };
+  if (score >= 61) return { bg: 'rgba(40,167,69,0.12)', border: 'rgba(40,167,69,0.35)', text: '#39ff14', label: 'STRONG' };
+  if (score >= 31) return { bg: 'rgba(255,193,7,0.12)', border: 'rgba(255,193,7,0.35)', text: '#ffdf00', label: 'WEAK' };
+  return { bg: 'rgba(120,120,120,0.1)', border: 'rgba(120,120,120,0.3)', text: '#888', label: 'SKIP' };
+}
+
+function ConfBadge({ score }) {
+  const c = getConfColor(score);
+  return (
+    <span style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px', whiteSpace: 'nowrap' }}>
+      {score}% · {c.label}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  const map = {
+    generated: { bg: 'rgba(40,167,69,0.15)', color: '#39ff14', border: 'rgba(40,167,69,0.3)', label: '✓ Generated' },
+    pending:   { bg: 'rgba(255,193,7,0.15)', color: '#ffdf00', border: 'rgba(255,193,7,0.3)',  label: '⟳ Pending' },
+    loading:   { bg: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: 'rgba(96,165,250,0.3)', label: '◌ Loading…' },
+    none:      { bg: 'rgba(120,120,120,0.1)', color: '#666',    border: 'rgba(120,120,120,0.2)', label: '— Not started' },
+  };
+  const s = map[status] || map.none;
+  return (
+    <span style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color, fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+      {s.label}
+    </span>
+  );
+}
+
+function FreqBadge({ freq }) {
+  const map = {
+    'very common': '#ff6b6b',
+    'common':      '#ffdf00',
+    'occasional':  '#a78bfa',
+  };
+  const color = map[(freq || '').toLowerCase()] || '#888';
+  return (
+    <span style={{ background: `${color}18`, border: `1px solid ${color}44`, color, fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', textTransform: 'uppercase' }}>
+      {freq}
+    </span>
+  );
+}
+
+function AccordionSection({ title, icon: Icon, iconColor = 'var(--gold-primary)', status, children, defaultOpen = true, action }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="card" style={{ borderColor: `${iconColor}33` }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Icon size={18} style={{ color: iconColor }} />
+          <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--text-main)', fontFamily: 'inherit' }}>{title}</h3>
+          <StatusBadge status={status} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {action}
+          {open ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
+        </div>
+      </div>
+      {open && <div style={{ marginTop: '1.25rem' }}>{children}</div>}
+    </div>
+  );
+}
+
+// ── compute confidence for a lead against all signal blocks ───────────────────
+function scoreLeadAgainstSignals(lead, signalBlocks) {
+  const results = {};
+  let totalScore = 0;
+  let blockCount = 0;
+
+  for (const block of (signalBlocks || [])) {
+    const confirmed = [], unconfirmed = [];
+    let blockScore = 0;
+
+    for (const sig of (block.signals || [])) {
+      const weight = sig.weight || 0;
+      let ok = false;
+      const st = (sig.signal || '').toLowerCase();
+      const side = sig.side;
+
+      if (side === 'solution_gap') {
+        const chat  = lead['Live Chat / Support'] || lead['live_chat'] || '';
+        const crm   = lead['CRM / Marketing Automation'] || lead['crm'] || '';
+        const pay   = lead['Payments'] || lead['payments'] || '';
+        const ads   = lead['Ads Active'] || lead['ads_active'] || '';
+        const cms   = lead['CMS'] || lead['cms'] || '';
+        const web   = lead['Website'] || lead['website'] || '';
+        const noVal = v => !v || v === 'N/A' || v === '[]' || v === '';
+
+        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot'))  ok = noVal(chat);
+        else if (st.includes('crm') || st.includes('automat'))                     ok = noVal(crm);
+        else if (st.includes('payment') || st.includes('order') || st.includes('booking')) ok = noVal(pay);
+        else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel'))    ok = ads === 'No' || noVal(ads);
+        else if (st.includes('website') || st.includes('web presence'))            ok = noVal(web);
+        else if (st.includes('analytics'))                                          ok = noVal(cms) && noVal(chat);
+        else ok = noVal(cms);
+      } else {
+        // problem_evidence — proxy: has email/phone as reachable contact
+        const email = lead['Email'] || lead['email'] || '';
+        const phone = lead['Phone'] || lead['phone'] || '';
+        ok = (email && email !== 'N/A' && email !== '') || (phone && phone !== 'N/A' && phone !== '');
+      }
+
+      if (ok) { confirmed.push(sig); blockScore += weight; }
+      else unconfirmed.push(sig);
+    }
+
+    results[block.pain_point_title] = { score: Math.min(blockScore, 100), confirmed, unconfirmed };
+    totalScore += Math.min(blockScore, 100);
+    blockCount++;
+  }
+
+  const overall = blockCount > 0 ? Math.round(totalScore / blockCount) : 0;
+  return { overall, perPainPoint: results };
+}
+
+export default function ProspectIntelligence({ leads: globalLeads = [], onSendToOutreach }) {
+  // Inputs
+  const [technology, setTechnology] = useState('');
+  const [industry, setIndustry] = useState('');
+  const [submitted, setSubmitted] = useState(null); // { technology, industry }
+
+  // Generation state
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState(null); // full LLM response
+  const [fromCache, setFromCache] = useState(false);
+
+  // Section open states
+  const [sec1Open, setSec1Open] = useState(true);
+  const [sec2Open, setSec2Open] = useState(true);
+  const [sec3Open, setSec3Open] = useState(true);
+  const [resultsOpen, setResultsOpen] = useState(true);
+
+  // Scraping state
+  const [scrapeKeyword, setScrapeKeyword] = useState('');
+  const [scrapeMax, setScrapeMax] = useState(20);
+  const [scraping, setScraping] = useState(false);
+  const [scrapeStatus, setScrapeStatus] = useState('');
+  const [scrapeLeads, setScrapeLeads] = useState([]);
+  const scrapeIntervalRef = useRef(null);
+
+  // Signal scan state
+  const [scanning, setScanning] = useState(false);
+  const [scoredLeads, setScoredLeads] = useState([]);
+
+  // Table filters
+  const [confThreshold, setConfThreshold] = useState(0);
+  const [filterPainPoint, setFilterPainPoint] = useState('all');
+  const [selectedLeads, setSelectedLeads] = useState(new Set());
+
+  // ── Generate / load from cache ───────────────────────────────────────────
+  const handleGenerate = async (forceRefresh = false) => {
+    if (!technology.trim()) return;
+    setLoading(true);
+    setError('');
+    setData(null);
+    setScoredLeads([]);
+    setScrapeLeads([]);
+    const sub = { technology: technology.trim(), industry: industry.trim() };
+    setSubmitted(sub);
+
+    try {
+      const endpoint = forceRefresh ? `${API}/prospect-intel/refresh` : `${API}/prospect-intel/generate`;
+      const res = await axios.post(endpoint, { technology: sub.technology, industry: sub.industry });
+      setData(res.data);
+      setFromCache(!forceRefresh);
+
+      // Auto-set scrape keyword from primary source
+      const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
+      if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || 'Failed to generate. Try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Scrape Leads ─────────────────────────────────────────────────────────
+  const handleScrape = async () => {
+    if (!scrapeKeyword.trim()) return;
+    setScraping(true);
+    setScrapeStatus('Starting scraper…');
+    setScrapeLeads([]);
+    setScoredLeads([]);
+
+    try {
+      await axios.post(`${API}/scrape`, { url: scrapeKeyword.trim(), max_results: scrapeMax });
+
+      // Poll status
+      scrapeIntervalRef.current = setInterval(async () => {
+        try {
+          const st = await axios.get(`${API}/status`);
+          const s = st.data?.scraping;
+          setScrapeStatus(s?.progress || '');
+          if (!s?.active) {
+            clearInterval(scrapeIntervalRef.current);
+            setScraping(false);
+            setScrapeStatus('Scrape complete — fetching leads…');
+            // Fetch new leads
+            const leadsRes = await axios.get(`${API}/results`);
+            setScrapeLeads(leadsRes.data || []);
+            setScrapeStatus(`${leadsRes.data?.length || 0} leads loaded`);
+          }
+        } catch { clearInterval(scrapeIntervalRef.current); setScraping(false); }
+      }, 2000);
+    } catch (err) {
+      setScraping(false);
+      setScrapeStatus(err?.response?.data?.detail || 'Scrape failed');
+    }
+  };
+
+  // ── Signal Scan ──────────────────────────────────────────────────────────
+  const handleSignalScan = () => {
+    const leadsToScore = scrapeLeads.length > 0 ? scrapeLeads : globalLeads;
+    if (!leadsToScore.length || !data?.section2_signals) return;
+    setScanning(true);
+
+    setTimeout(() => {
+      const scored = leadsToScore.map(lead => {
+        const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, data.section2_signals);
+        return { ...lead, _overall: overall, _perPainPoint: perPainPoint };
+      });
+      scored.sort((a, b) => b._overall - a._overall);
+      setScoredLeads(scored);
+      setScanning(false);
+    }, 800);
+  };
+
+  // ── Export CSV ───────────────────────────────────────────────────────────
+  const handleExportCSV = () => {
+    if (!scoredLeads.length) return;
+    const painTitles = data?.section2_signals?.map(b => b.pain_point_title) || [];
+    const headers = ['Business Name', 'Industry', 'Email', 'Phone', 'Website', 'Overall Score', ...painTitles];
+    const rows = scoredLeads.map(l => [
+      l['Business Name'] || '', l['Industry'] || '',
+      l['Email'] || '', l['Phone'] || '',
+      l['Website'] || '', l._overall,
+      ...painTitles.map(pt => l._perPainPoint?.[pt]?.score || 0)
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `prospect_intel_${submitted?.technology}_${Date.now()}.csv`; a.click();
+  };
+
+  // ── Send selected to Outreach ─────────────────────────────────────────────
+  const handleSendToOutreach = () => {
+    if (!onSendToOutreach) return;
+    const toSend = scoredLeads.filter((_, i) => selectedLeads.has(i));
+    onSendToOutreach(toSend);
+  };
+
+  // ── Filtered leads ────────────────────────────────────────────────────────
+  const filteredScored = scoredLeads.filter(l => {
+    if (l._overall < confThreshold) return false;
+    if (filterPainPoint !== 'all') {
+      const ppScore = l._perPainPoint?.[filterPainPoint]?.score || 0;
+      if (ppScore < confThreshold) return false;
+    }
+    return true;
+  });
+
+  const painTitles = data?.section2_signals?.map(b => b.pain_point_title) || [];
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* HEADER */}
+      <div>
+        <h2 style={{ margin: 0, fontSize: '1.6rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Zap size={24} style={{ color: 'var(--gold-primary)' }} /> Prospect Intelligence
+        </h2>
+        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+          Enter a technology or keyword → AI generates pain points, signal detection plan, and lead sources → scrape and score leads automatically.
+        </p>
+      </div>
+
+      {/* INPUT FORM */}
+      <div className="card">
+        <form onSubmit={e => { e.preventDefault(); handleGenerate(false); }} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: '2 1 260px' }}>
+            <label>Technology / Keyword <span style={{ color: '#ff6b6b', fontWeight: 700 }}>*</span></label>
+            <div style={{ position: 'relative' }}>
+              <Zap size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--gold-primary)' }} />
+              <input type="text" value={technology} onChange={e => setTechnology(e.target.value)}
+                placeholder="e.g. chatbots, voice agents, website development, automation"
+                style={{ paddingLeft: '32px' }} required />
+            </div>
+          </div>
+          <div style={{ flex: '1 1 200px' }}>
+            <label>Industry <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+            <div style={{ position: 'relative' }}>
+              <Globe size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input type="text" value={industry} onChange={e => setIndustry(e.target.value)}
+                placeholder="e.g. restaurants, real estate" style={{ paddingLeft: '30px' }} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0 }}>
+            <button type="submit" disabled={loading || !technology.trim()}
+              style={{ width: 'auto', marginBottom: 0, padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {loading ? <Loader size={15} className="animate-spin" /> : <Search size={15} />}
+              {loading ? 'Generating…' : 'Generate Intelligence'}
+            </button>
+            {data && (
+              <button type="button" onClick={() => handleGenerate(true)} disabled={loading}
+                title="Regenerate fresh from LLM"
+                style={{ width: 'auto', marginBottom: 0, padding: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-muted)', transform: 'none', boxShadow: 'none' }}>
+                <RefreshCw size={15} />
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+
+      {/* ERROR */}
+      {error && (
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '1rem', color: '#ff6b6b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }} /><span>{error}</span>
+          </div>
+          <button onClick={() => handleGenerate(true)} style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: '0.78rem', background: 'rgba(220,53,69,0.15)', border: '1px solid rgba(220,53,69,0.4)', color: '#ff6b6b', transform: 'none', boxShadow: 'none' }}>Retry</button>
+        </div>
+      )}
+
+      {/* LOADING */}
+      {loading && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '3rem', gap: '1rem' }}>
+          <Loader size={32} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />
+          <span style={{ color: 'var(--text-muted)' }}>Generating pain points, signal detection plan, and lead sources with AI…</span>
+          <span style={{ color: 'rgba(212,175,55,0.5)', fontSize: '0.78rem' }}>Takes 20–40 seconds · result is cached for instant future loads</span>
+        </div>
+      )}
+
+      {/* SUMMARY BAR */}
+      {data && submitted && (
+        <div style={{ background: 'rgba(212,175,55,0.06)', border: '1px solid rgba(212,175,55,0.2)', borderRadius: '10px', padding: '0.875rem 1.25rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'center' }}>
+          {[
+            { label: 'Technology', value: submitted.technology, color: 'var(--gold-primary)' },
+            { label: 'Industry Scope', value: submitted.industry || 'All Industries', color: '#60a5fa' },
+            { label: 'Pain Points', value: data.section1_pain_points?.length || 0, color: '#ff6b6b' },
+            { label: 'Signal Blocks', value: data.section2_signals?.length || 0, color: '#a78bfa' },
+            { label: 'Lead Sources', value: data.section3_lead_sources?.length || 0, color: '#39ff14' },
+            { label: 'Scored Leads', value: scoredLeads.length, color: '#ffdf00' },
+          ].map((s, i) => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+              <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>{s.label}</span>
+              <span style={{ fontSize: '1.1rem', fontWeight: 700, color: s.color }}>{s.value}</span>
+            </div>
+          ))}
+          {fromCache && <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#39ff14', background: 'rgba(40,167,69,0.1)', border: '1px solid rgba(40,167,69,0.3)', padding: '2px 10px', borderRadius: '20px' }}>✓ From Supabase cache</span>}
+        </div>
+      )}
+
+      {data && (
+        <>
+          {/* ── SECTION 1: PAIN POINTS ─────────────────────────────────────── */}
+          <AccordionSection title="Section 1 — Pain Points" icon={AlertCircle} iconColor="#ff6b6b"
+            status={data.section1_pain_points?.length ? 'generated' : 'none'}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {(data.section1_pain_points || []).map((pp, i) => (
+                <div key={i} style={{ background: 'rgba(255,107,107,0.04)', border: '1px solid rgba(255,107,107,0.15)', borderRadius: '10px', padding: '1rem 1.1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ background: 'rgba(255,107,107,0.15)', color: '#ff6b6b', fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px', border: '1px solid rgba(255,107,107,0.3)' }}>#{i + 1}</span>
+                      <strong style={{ color: 'var(--gold-primary)', fontSize: '0.97rem' }}>{pp.title}</strong>
+                    </div>
+                    <FreqBadge freq={pp.frequency} />
+                  </div>
+                  <p style={{ margin: '0 0 0.6rem', fontSize: '0.87rem', color: 'var(--text-main)', lineHeight: 1.65 }}>{pp.description}</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '0.5rem' }}>
+                    <div style={{ background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Revenue Impact</div>
+                      <div style={{ fontSize: '0.83rem', color: '#a7f3d0' }}>{pp.revenue_impact}</div>
+                    </div>
+                    <div style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Why Tech Solves It</div>
+                      <div style={{ fontSize: '0.83rem', color: '#ddd6fe' }}>{pp.why_tech_solves}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </AccordionSection>
+
+          {/* ── SECTION 2: SIGNAL DETECTION PLAN ──────────────────────────── */}
+          <AccordionSection title="Section 2 — Signal Detection Plan" icon={Shield} iconColor="#a78bfa"
+            status={data.section2_signals?.length ? 'generated' : 'none'}
+            action={
+              <button onClick={e => { e.stopPropagation(); handleSignalScan(); }}
+                disabled={scanning || (!scrapeLeads.length && !globalLeads.length)}
+                style={{ margin: 0, width: 'auto', padding: '4px 12px', fontSize: '0.78rem', background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)', color: '#a78bfa', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '6px', transform: 'none', boxShadow: 'none' }}>
+                {scanning ? <Loader size={11} className="animate-spin" /> : <Activity size={11} />}
+                {scanning ? 'Scanning…' : 'Run Signal Scan'}
+              </button>
+            }>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1.25rem', lineHeight: 1.5 }}>
+              Each pain point: <strong style={{ color: '#60a5fa' }}>Side 1 — Solution Gap</strong> (no fix in place) + <strong style={{ color: '#fbbf24' }}>Side 2 — Problem Evidence</strong> (pain exists). Weights sum to 100%.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              {(data.section2_signals || []).map((block, bi) => {
+                const side1 = block.signals?.filter(s => s.side === 'solution_gap') || [];
+                const side2 = block.signals?.filter(s => s.side === 'problem_evidence') || [];
+                const totalW = block.signals?.reduce((a, s) => a + (s.weight || 0), 0) || 0;
+                return (
+                  <div key={bi} style={{ background: 'rgba(138,43,226,0.04)', border: '1px solid rgba(138,43,226,0.18)', borderRadius: '10px', overflow: 'hidden' }}>
+                    <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid rgba(138,43,226,0.12)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AlertCircle size={14} style={{ color: '#f87171' }} />
+                        <span style={{ fontWeight: 700, color: 'var(--gold-primary)', fontSize: '0.92rem' }}>{block.pain_point_title}</span>
+                      </div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        {totalW}% total weight
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                      <div style={{ borderRight: '1px solid rgba(96,165,250,0.12)', padding: '0.85rem 1rem' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Shield size={11} /> Side 1 — Solution Gap
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
+                          {side1.map((sig, si) => <MiniSignalCard key={si} sig={sig} accent="#60a5fa" />)}
+                          {side1.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No side 1 signals.</span>}
+                        </div>
+                      </div>
+                      <div style={{ padding: '0.85rem 1rem' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Zap size={11} /> Side 2 — Problem Evidence
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
+                          {side2.map((sig, si) => <MiniSignalCard key={si} sig={sig} accent="#fbbf24" />)}
+                          {side2.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No side 2 signals.</span>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </AccordionSection>
+
+          {/* ── SECTION 3: AUDIENCE & LEAD SOURCES ────────────────────────── */}
+          <AccordionSection title="Section 3 — Audience & Lead Sources" icon={Users} iconColor="#39ff14"
+            status={data.section3_lead_sources?.length ? 'generated' : 'none'}>
+            {/* Scrape control */}
+            <div style={{ background: 'rgba(57,255,20,0.04)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 220px' }}>
+                <label style={{ color: '#39ff14' }}>Google Maps Search Keyword</label>
+                <div style={{ position: 'relative' }}>
+                  <MapPin size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#39ff14' }} />
+                  <input type="text" value={scrapeKeyword} onChange={e => setScrapeKeyword(e.target.value)}
+                    placeholder='e.g. "restaurants London" or "real estate agents Manchester"'
+                    style={{ paddingLeft: '30px', borderColor: 'rgba(57,255,20,0.25)' }} />
+                </div>
+              </div>
+              <div style={{ minWidth: '100px' }}>
+                <label>Max Results</label>
+                <input type="number" value={scrapeMax} onChange={e => setScrapeMax(Number(e.target.value))} min={5} max={100} />
+              </div>
+              <button onClick={handleScrape} disabled={scraping || !scrapeKeyword.trim()}
+                style={{ margin: 0, width: 'auto', padding: '0.75rem 1.25rem', background: 'rgba(57,255,20,0.15)', border: '1px solid rgba(57,255,20,0.35)', color: '#39ff14', display: 'flex', alignItems: 'center', gap: '8px', transform: 'none', boxShadow: 'none' }}>
+                {scraping ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
+                {scraping ? 'Scraping…' : 'Scrape Leads'}
+              </button>
+            </div>
+            {scrapeStatus && (
+              <div style={{ fontSize: '0.78rem', color: scraping ? '#60a5fa' : '#39ff14', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {scraping && <Loader size={11} className="animate-spin" />}{scrapeStatus}
+              </div>
+            )}
+
+            {/* Source cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+              {(data.section3_lead_sources || []).map((src, i) => (
+                <div key={i} style={{
+                  background: src.is_primary ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
+                  border: `1px solid ${src.is_primary ? 'rgba(212,175,55,0.25)' : 'rgba(255,255,255,0.07)'}`,
+                  borderRadius: '8px', padding: '0.85rem 1rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {src.is_primary && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--gold-primary)', background: 'rgba(212,175,55,0.15)', padding: '1px 6px', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.3)' }}>PRIMARY</span>}
+                      <strong style={{ fontSize: '0.88rem', color: src.is_primary ? 'var(--gold-primary)' : '#fff' }}>{src.platform}</strong>
+                    </div>
+                    <span style={{
+                      fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '10px',
+                      color: src.estimated_volume === 'high' ? '#39ff14' : src.estimated_volume === 'medium' ? '#ffdf00' : '#a78bfa',
+                      background: src.estimated_volume === 'high' ? 'rgba(57,255,20,0.1)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.1)' : 'rgba(167,139,250,0.1)',
+                      border: `1px solid ${src.estimated_volume === 'high' ? 'rgba(57,255,20,0.3)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.3)' : 'rgba(167,139,250,0.3)'}`
+                    }}>{src.estimated_volume} volume</span>
+                  </div>
+                  <code style={{ fontSize: '0.8rem', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', padding: '3px 8px', borderRadius: '4px', display: 'block', marginBottom: '0.5rem', fontFamily: 'monospace' }}>
+                    {src.search_keyword}
+                  </code>
+                  <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.why}</p>
+                  {src.filter_tip && (
+                    <p style={{ margin: 0, fontSize: '0.74rem', color: '#60a5fa', lineHeight: 1.4 }}>💡 {src.filter_tip}</p>
+                  )}
+                  {src.is_primary && (
+                    <button onClick={() => setScrapeKeyword(src.search_keyword)}
+                      style={{ marginTop: '8px', marginBottom: 0, width: 'auto', padding: '3px 10px', fontSize: '0.72rem', background: 'rgba(212,175,55,0.12)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', borderRadius: '6px', transform: 'none', boxShadow: 'none' }}>
+                      Use this keyword ↑
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </AccordionSection>
+
+          {/* ── RESULTS TABLE ─────────────────────────────────────────────── */}
+          {(scoredLeads.length > 0 || scanning) && (
+            <div className="card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '1rem' }}>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <BarChart2 size={17} style={{ color: 'var(--gold-primary)' }} /> Scored Leads
+                  <span className="badge" style={{ margin: 0 }}>{filteredScored.length} / {scoredLeads.length}</span>
+                </h3>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {/* Confidence threshold */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Min score:</span>
+                    <input type="range" min={0} max={100} value={confThreshold} onChange={e => setConfThreshold(Number(e.target.value))}
+                      style={{ width: '100px', accentColor: 'var(--gold-primary)' }} />
+                    <span style={{ fontSize: '0.72rem', color: 'var(--gold-primary)', fontWeight: 700, minWidth: '30px' }}>{confThreshold}%</span>
+                  </div>
+                  {/* Pain point filter */}
+                  <select value={filterPainPoint} onChange={e => setFilterPainPoint(e.target.value)}
+                    style={{ height: '32px', fontSize: '0.78rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: 'var(--text-main)', borderRadius: '6px', padding: '0 8px', width: 'auto' }}>
+                    <option value="all">All Pain Points</option>
+                    {painTitles.map((pt, i) => <option key={i} value={pt}>{pt}</option>)}
+                  </select>
+                  {/* Export */}
+                  <button onClick={handleExportCSV}
+                    style={{ margin: 0, width: 'auto', padding: '5px 12px', fontSize: '0.78rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-color)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px', transform: 'none', boxShadow: 'none' }}>
+                    <Download size={13} /> Export CSV
+                  </button>
+                  {/* Send to Outreach */}
+                  {onSendToOutreach && selectedLeads.size > 0 && (
+                    <button onClick={handleSendToOutreach}
+                      style={{ margin: 0, width: 'auto', padding: '5px 12px', fontSize: '0.78rem', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.35)', color: 'var(--gold-primary)', display: 'flex', alignItems: 'center', gap: '5px', transform: 'none', boxShadow: 'none' }}>
+                      <Send size={13} /> Send {selectedLeads.size} to Outreach
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {scanning ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '2rem', color: 'var(--text-muted)' }}>
+                  <Loader size={20} className="animate-spin" style={{ color: '#a78bfa' }} /> Running signal scan across {(scrapeLeads.length || globalLeads.length)} leads…
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', maxHeight: '500px', overflowY: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: '900px' }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}><input type="checkbox" onChange={e => {
+                          if (e.target.checked) setSelectedLeads(new Set(filteredScored.map((_, i) => i)));
+                          else setSelectedLeads(new Set());
+                        }} /></th>
+                        <th style={thStyle}>Business</th>
+                        <th style={thStyle}>Industry</th>
+                        <th style={thStyle}>Contact</th>
+                        <th style={thStyle}>Overall</th>
+                        {painTitles.map((pt, i) => <th key={i} style={{ ...thStyle, maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pt}>{pt.length > 18 ? pt.slice(0, 16) + '…' : pt}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredScored.map((lead, idx) => {
+                        const name = lead['Business Name'] || lead['business_name'] || '—';
+                        const industry = lead['Industry'] || lead['industry'] || '—';
+                        const email = lead['Email'] || lead['email'] || '';
+                        const phone = lead['Phone'] || lead['phone'] || '';
+                        const website = lead['Website'] || lead['website'] || '';
+                        const cc = getConfColor(lead._overall);
+                        const isSelected = selectedLeads.has(idx);
+                        return (
+                          <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent' }}>
+                            <td style={tdStyle}>
+                              <input type="checkbox" checked={isSelected} onChange={e => {
+                                const ns = new Set(selectedLeads);
+                                e.target.checked ? ns.add(idx) : ns.delete(idx);
+                                setSelectedLeads(ns);
+                              }} />
+                            </td>
+                            <td style={tdStyle}>
+                              <div style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem' }}>{name}</div>
+                              {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
+                                <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 30)}
+                              </a>}
+                            </td>
+                            <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>{industry}</td>
+                            <td style={tdStyle}>
+                              {email && email !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#60a5fa' }}>✉ {email}</div>}
+                              {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#a78bfa' }}>☎ {phone}</div>}
+                            </td>
+                            <td style={tdStyle}><ConfBadge score={lead._overall} /></td>
+                            {painTitles.map((pt, pi) => {
+                              const ppData = lead._perPainPoint?.[pt];
+                              const score = ppData?.score || 0;
+                              const cc2 = getConfColor(score);
+                              return (
+                                <td key={pi} style={tdStyle}>
+                                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: cc2.text }}>{score}%</div>
+                                  <div style={{ display: 'flex', gap: '2px', marginTop: '2px', flexWrap: 'wrap' }}>
+                                    {ppData?.confirmed?.map((s, si) => (
+                                      <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#39ff14', display: 'inline-block' }} />
+                                    ))}
+                                    {ppData?.unconfirmed?.map((s, si) => (
+                                      <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block' }} />
+                                    ))}
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {filteredScored.length === 0 && (
+                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No leads above {confThreshold}% confidence. Lower the slider or run a new scrape.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* EMPTY STATE */}
+      {!data && !loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '280px', border: '1px dashed var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.01)' }}>
+          <Zap size={48} style={{ color: 'var(--gold-primary)', opacity: 0.3, marginBottom: '1rem' }} />
+          <h4 style={{ color: 'var(--text-main)', fontSize: '1rem', marginBottom: '0.25rem' }}>Enter a technology above</h4>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', maxWidth: '360px' }}>
+            e.g. "chatbots", "voice agents", "website development", "online booking systems". AI will generate pain points, signals, and lead sources automatically.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Table styles ──────────────────────────────────────────────────────────────
+const thStyle = {
+  padding: '0.7rem 0.85rem', background: '#141417', color: 'var(--gold-primary)',
+  fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.8px',
+  borderBottom: '2px solid rgba(212,175,55,0.2)', textAlign: 'left', whiteSpace: 'nowrap',
+  position: 'sticky', top: 0, zIndex: 5
+};
+const tdStyle = {
+  padding: '0.65rem 0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)',
+  fontSize: '0.82rem', color: 'var(--text-main)', verticalAlign: 'top'
+};
+
+// ── Mini signal card (compact version for Section 2) ─────────────────────────
+function MiniSignalCard({ sig, accent }) {
+  return (
+    <div style={{ background: `${accent}08`, border: `1px solid ${accent}1a`, borderRadius: '7px', padding: '0.6rem 0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px', marginBottom: '0.35rem' }}>
+        <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start', flex: 1 }}>
+          <Eye size={11} style={{ color: accent, marginTop: '2px', flexShrink: 0 }} />
+          <span style={{ fontSize: '0.79rem', color: '#e0e0e0', lineHeight: 1.4 }}>{sig.signal}</span>
+        </div>
+        {sig.weight != null && (
+          <span style={{ fontSize: '0.65rem', fontWeight: 800, color: accent, background: `${accent}18`, padding: '1px 6px', borderRadius: '10px', border: `1px solid ${accent}33`, flexShrink: 0 }}>
+            {sig.weight}%
+          </span>
+        )}
+      </div>
+      {sig.sources && sig.sources.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingLeft: '16px' }}>
+          {sig.sources.map((src, i) => (
+            <div key={i} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px', padding: '0.35rem 0.55rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#fff' }}>{src.name}</span>
+                <span style={{
+                  fontSize: '0.58rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 4px', borderRadius: '3px',
+                  background: src.difficulty === 'easy' ? 'rgba(40,167,69,0.15)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.15)' : 'rgba(220,53,69,0.15)',
+                  color: src.difficulty === 'easy' ? '#39ff14' : src.difficulty === 'medium' ? '#ffdf00' : '#ff6b6b',
+                  border: `1px solid ${src.difficulty === 'easy' ? 'rgba(40,167,69,0.3)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.3)' : 'rgba(220,53,69,0.3)'}`
+                }}>{src.difficulty}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'flex-start' }}>
+                <Search size={9} style={{ color: '#fbbf24', marginTop: '2px', flexShrink: 0 }} />
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{src.how_to_find}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {sig.confirmed_if && (
+        <div style={{ paddingLeft: '16px', marginTop: '4px' }}>
+          <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start', background: 'rgba(40,167,69,0.06)', border: '1px solid rgba(40,167,69,0.15)', borderRadius: '5px', padding: '0.35rem 0.55rem' }}>
+            <CheckCircle size={10} style={{ color: '#39ff14', marginTop: '2px', flexShrink: 0 }} />
+            <div>
+              <span style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: '#39ff14', fontWeight: 700, letterSpacing: '0.4px' }}>Confirmed if</span>
+              <div style={{ fontSize: '0.72rem', color: '#a7f3d0', marginTop: '1px', lineHeight: 1.4 }}>{sig.confirmed_if}</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

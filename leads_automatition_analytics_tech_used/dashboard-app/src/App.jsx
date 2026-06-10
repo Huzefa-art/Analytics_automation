@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp, GitCompare, Target } from 'lucide-react';
+import { Search, Play, Activity, Globe, MapPin, Phone, Database, ExternalLink, RefreshCw, Download, Filter, Send, TrendingUp, GitCompare, Target, Zap } from 'lucide-react';
 import MarketResearch from './MarketResearch';
 import MarketComparison from './MarketComparison';
 import OutreachPlanner from './OutreachPlanner';
+import ProspectIntelligence from './ProspectIntelligence';
 
 const API_BASE = '/api';
 
@@ -385,6 +386,14 @@ function App() {
                     >
                         <Target size={18} />
                         <span>Outreach Campaign</span>
+                    </button>
+
+                    <button 
+                        className={`sidebar-nav-item ${activeTab === 'prospect-intel' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('prospect-intel')}
+                    >
+                        <Zap size={18} />
+                        <span>Prospect Intelligence</span>
                     </button>
                 </nav>
 
@@ -934,6 +943,10 @@ function App() {
 
                 {activeTab === 'outreach' && (
                     <OutreachPlanner />
+                )}
+
+                {activeTab === 'prospect-intel' && (
+                    <ProspectIntelligence leads={results} />
                 )}
             </main>
 
