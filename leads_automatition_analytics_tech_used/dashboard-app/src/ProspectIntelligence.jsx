@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import axios from 'axios';
 import {
   Search, Zap, AlertCircle, Shield, Eye, CheckCircle, MapPin,
@@ -58,19 +58,19 @@ function FreqBadge({ freq }) {
 function AccordionSection({ title, icon: Icon, iconColor = 'var(--gold-primary)', status, children, defaultOpen = true, action }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="card" style={{ borderColor: `${iconColor}33` }}>
-      <div onClick={() => setOpen(o => !o)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Icon size={18} style={{ color: iconColor }} />
-          <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--text-main)', fontFamily: 'inherit' }}>{title}</h3>
+    <div className="card pi-accordion" style={{ borderColor: `${iconColor}33` }}>
+      <div onClick={() => setOpen(o => !o)} className="pi-accordion-header">
+        <div className="pi-accordion-title">
+          <Icon size={18} style={{ color: iconColor, flexShrink: 0 }} />
+          <h3>{title}</h3>
           <StatusBadge status={status} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="pi-accordion-actions">
           {action}
           {open ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
         </div>
       </div>
-      {open && <div style={{ marginTop: '1.25rem' }}>{children}</div>}
+      {open && <div className="pi-accordion-body">{children}</div>}
     </div>
   );
 }
@@ -179,6 +179,14 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   }, []);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const onChange = () => { if (mq.matches) setHistoryOpen(false); };
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   // ── Load a saved history entry ────────────────────────────────────────────
   const handleLoadHistory = async (entry) => {
@@ -338,14 +346,14 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+    <div className="animate-fade-in prospect-intel-page">
 
       {/* HEADER */}
-      <div>
-        <h2 style={{ margin: 0, fontSize: '1.6rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Zap size={24} style={{ color: 'var(--gold-primary)' }} /> Prospect Intelligence
+      <div className="pi-header">
+        <h2>
+          <Zap size={24} style={{ color: 'var(--gold-primary)', flexShrink: 0 }} /> Prospect Intelligence
         </h2>
-        <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+        <p>
           Enter a technology or keyword → AI generates pain points, signal detection plan, and lead sources → scrape and score leads automatically.
         </p>
       </div>
@@ -417,8 +425,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
       {/* INPUT FORM */}
       <div className="card">
-        <form onSubmit={e => { e.preventDefault(); handleGenerate(false); }} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div style={{ flex: '2 1 260px' }}>
+        <form onSubmit={e => { e.preventDefault(); handleGenerate(false); }} className="pi-form">
+          <div className="pi-form-field pi-form-field--wide">
             <label>Technology / Keyword <span style={{ color: '#ff6b6b', fontWeight: 700 }}>*</span></label>
             <div style={{ position: 'relative' }}>
               <Zap size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--gold-primary)' }} />
@@ -427,7 +435,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                 style={{ paddingLeft: '32px' }} required />
             </div>
           </div>
-          <div style={{ flex: '1 1 200px' }}>
+          <div className="pi-form-field">
             <label>Industry <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
             <div style={{ position: 'relative' }}>
               <Globe size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
@@ -435,9 +443,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                 placeholder="e.g. restaurants, real estate" style={{ paddingLeft: '30px' }} />
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0 }}>
-            <button type="submit" disabled={loading || !technology.trim()}
-              style={{ width: 'auto', marginBottom: 0, padding: '0.75rem 1.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div className="pi-form-actions">
+            <button type="submit" disabled={loading || !technology.trim()} className="pi-btn-primary">
               {loading ? <Loader size={15} className="animate-spin" /> : <Search size={15} />}
               {loading ? 'Generating…' : 'Generate Intelligence'}
             </button>
@@ -473,7 +480,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
       {/* SUMMARY BAR */}
       {data && submitted && (
-        <div style={{ background: 'rgba(212,175,55,0.06)', border: '1px solid rgba(212,175,55,0.2)', borderRadius: '10px', padding: '0.875rem 1.25rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'center' }}>
+        <div className="pi-summary-bar">
           {[
             { label: 'Technology', value: submitted.technology, color: 'var(--gold-primary)' },
             { label: 'Industry Scope', value: submitted.industry || 'All Industries', color: '#60a5fa' },
@@ -507,7 +514,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                     <FreqBadge freq={pp.frequency} />
                   </div>
                   <p style={{ margin: '0 0 0.6rem', fontSize: '0.87rem', color: 'var(--text-main)', lineHeight: 1.65 }}>{pp.description}</p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '0.5rem' }}>
+                  <div className="pi-grid-2" style={{ marginTop: '0.5rem' }}>
                     <div style={{ background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
                       <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Revenue Impact</div>
                       <div style={{ fontSize: '0.83rem', color: '#a7f3d0' }}>{pp.revenue_impact}</div>
@@ -552,8 +559,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                         {totalW}% total weight
                       </span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                      <div style={{ borderRight: '1px solid rgba(96,165,250,0.12)', padding: '0.85rem 1rem' }}>
+                    <div className="pi-signal-grid">
+                      <div className="pi-signal-col pi-signal-col--left">
                         <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
                           <Shield size={11} /> Side 1 — Solution Gap
                         </div>
@@ -562,7 +569,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                           {side1.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No side 1 signals.</span>}
                         </div>
                       </div>
-                      <div style={{ padding: '0.85rem 1rem' }}>
+                      <div className="pi-signal-col">
                         <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
                           <Zap size={11} /> Side 2 — Problem Evidence
                         </div>
@@ -582,8 +589,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
           <AccordionSection title="Section 3 — Audience & Lead Sources" icon={Users} iconColor="#39ff14"
             status={data.section3_lead_sources?.length ? 'generated' : 'none'}>
             {/* Scrape control */}
-            <div style={{ background: 'rgba(57,255,20,0.04)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <div style={{ flex: '1 1 220px' }}>
+            <div className="pi-scrape-bar">
+              <div className="pi-form-field">
                 <label style={{ color: '#39ff14' }}>Google Maps Search Keyword</label>
                 <div style={{ position: 'relative' }}>
                   <MapPin size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#39ff14' }} />
@@ -609,7 +616,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
             )}
 
             {/* Source cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+            <div className="pi-source-grid">
               {(data.section3_lead_sources || []).map((src, i) => (
                 <div key={i} style={{
                   background: src.is_primary ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
@@ -648,8 +655,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
           {/* ── RESULTS TABLE ─────────────────────────────────────────────── */}
           {(scoredLeads.length > 0 || scanning) && (
-            <div className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '1rem' }}>
+            <div className="card pi-results-card">
+              <div className="pi-results-toolbar">
                 <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <BarChart2 size={17} style={{ color: 'var(--gold-primary)' }} /> Scored Leads
                   <span className="badge" style={{ margin: 0 }}>{filteredScored.length} / {scoredLeads.length}</span>
@@ -688,8 +695,9 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                   <Loader size={20} className="animate-spin" style={{ color: '#a78bfa' }} /> Running signal scan across {(scrapeLeads.length || globalLeads.length)} leads…
                 </div>
               ) : (
-                <div style={{ overflowX: 'auto', maxHeight: '500px', overflowY: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: '900px' }}>
+                <>
+                <div className="pi-table-scroll">
+                  <table className="pi-results-table">
                     <thead>
                       <tr>
                         <th style={thStyle}><input type="checkbox" onChange={e => {
@@ -762,6 +770,66 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                     </div>
                   )}
                 </div>
+
+                <div className="pi-mobile-leads">
+                  {filteredScored.map((lead, idx) => {
+                    const name = lead['Business Name'] || lead['business_name'] || '—';
+                    const industry = lead['Industry'] || lead['industry'] || '—';
+                    const email = lead['Email'] || lead['email'] || '';
+                    const phone = lead['Phone'] || lead['phone'] || '';
+                    const website = lead['Website'] || lead['website'] || '';
+                    const isSelected = selectedLeads.has(idx);
+                    return (
+                      <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
+                        <div className="pi-lead-card-top">
+                          <label className="pi-lead-check">
+                            <input type="checkbox" checked={isSelected} onChange={e => {
+                              const ns = new Set(selectedLeads);
+                              e.target.checked ? ns.add(idx) : ns.delete(idx);
+                              setSelectedLeads(ns);
+                            }} />
+                          </label>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="pi-lead-name">{name}</div>
+                            <div className="pi-lead-meta">{industry}</div>
+                          </div>
+                          <ConfBadge score={lead._overall} />
+                        </div>
+                        {(email || phone) && (
+                          <div className="pi-lead-contact">
+                            {email && email !== 'N/A' && <span>✉ {email}</span>}
+                            {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
+                          </div>
+                        )}
+                        {website && website !== 'N/A' && (
+                          <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
+                            <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
+                          </a>
+                        )}
+                        {painTitles.length > 0 && (
+                          <div className="pi-lead-scores">
+                            {painTitles.map((pt, pi) => {
+                              const score = lead._perPainPoint?.[pt]?.score || 0;
+                              const cc2 = getConfColor(score);
+                              return (
+                                <div key={pi} className="pi-lead-score-row">
+                                  <span className="pi-lead-score-label" title={pt}>{pt}</span>
+                                  <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {filteredScored.length === 0 && (
+                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No leads above {confThreshold}% confidence.
+                    </div>
+                  )}
+                </div>
+                </>
               )}
             </div>
           )}
@@ -770,7 +838,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
       {/* EMPTY STATE */}
       {!data && !loading && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '280px', border: '1px dashed var(--border-color)', borderRadius: '12px', background: 'rgba(255,255,255,0.01)' }}>
+        <div className="pi-empty-state">
           <Zap size={48} style={{ color: 'var(--gold-primary)', opacity: 0.3, marginBottom: '1rem' }} />
           <h4 style={{ color: 'var(--text-main)', fontSize: '1rem', marginBottom: '0.25rem' }}>Enter a technology above</h4>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', maxWidth: '360px' }}>
