@@ -334,6 +334,182 @@ async def get_cached_signal_plan(industry: str, campaign_key: str = ""):
             raise HTTPException(status_code=404, detail="Cached plan has empty signals — needs regeneration")
     return plan
 
+# ── Prospect Intelligence Endpoints ─────────────────────────────────────────
+
+class ProspectIntelRequest(BaseModel):
+    technology: str
+    industry: Optional[str] = ""
+
+def make_prospect_intel_prompt(technology: str, industry: str) -> str:
+    industry_scope = f"the {industry} industry" if industry else "all industries"
+    return f"""You are a senior B2B sales strategist and market intelligence analyst.
+
+A company sells: {technology}
+Target market: {industry_scope}
+
+Generate a structured Prospect Intelligence Report with exactly THREE sections.
+
+═══ SECTION 1 — PAIN POINTS ═══
+Generate minimum 5 pain points that "{technology}" directly solves for {industry_scope}.
+For each pain point:
+- title: short compelling name (max 6 words)
+- description: 2-3 sentences explaining the real-world business problem
+- revenue_impact: specific stat or estimate e.g. "businesses report 23% reduction in missed bookings after implementing this" — be specific and realistic
+- frequency: one of "very common" / "common" / "occasional"
+- why_tech_solves: 1 sentence explaining exactly how {technology} fixes this pain
+
+═══ SECTION 2 — SIGNAL DETECTION PLAN ═══
+For EACH pain point above, generate signals to prove a specific business is facing that problem and does NOT already have {technology} in place.
+Two sides per pain point:
+
+SIDE 1 (solution_gap): proof business has NO {technology} already installed.
+SIDE 2 (problem_evidence): external proof the pain EXISTS for that business.
+
+ALLOWED SOURCES ONLY (no login required), in priority order:
+1. Business website (direct URL)
+2. Google Maps listing (public GMB card)
+3. Google Search snippet (read snippet only without clicking)
+4. BuiltWith.com / Wappalyzer (detects installed tech stack publicly)
+5. Yelp / TripAdvisor / Trustpilot public pages
+6. OpenTable / Resy / Zomato public listings
+7. Indeed / LinkedIn public job search (no login)
+8. Google Jobs panel in SERP
+9. Google News search
+10. Yellow Pages / Foursquare / Bark.com public profiles
+11. Glassdoor public listings
+12. Similarweb public overview
+
+FACEBOOK/INSTAGRAM: search "[business name] facebook" on Google, read snippet only. Do NOT visit FB/IG directly.
+
+RULES:
+- Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer)
+- Signal weights per pain point sum to 100%
+- Side 1 signals: 20-30% weight each
+- Side 2 signals: 10-20% weight each
+- how_to_find must be exact step-by-step, not vague
+
+═══ SECTION 3 — AUDIENCE & LEAD SOURCES ═══
+Generate a lead sourcing plan to find businesses facing these pain points.
+Include 5-7 sources.
+For each source:
+- platform: name of platform
+- search_keyword: exact search string to use on that platform
+- why: 1 sentence explaining why this surfaces the right businesses
+- estimated_volume: "high" / "medium" / "low"
+- filter_tip: how to filter results to find best matches
+- is_primary: true for Google Maps (always include as first/primary source)
+
+Always include Google Maps as primary with exact keyword format: "[industry] [city/region]"
+
+═══ OUTPUT FORMAT ═══
+Respond ONLY with valid JSON. No markdown fences. Exact structure:
+{{
+  "technology": "{technology}",
+  "industry": "{industry_scope}",
+  "section1_pain_points": [
+    {{
+      "title": "...",
+      "description": "...",
+      "revenue_impact": "...",
+      "frequency": "very common",
+      "why_tech_solves": "..."
+    }}
+  ],
+  "section2_signals": [
+    {{
+      "pain_point_title": "title matching section1",
+      "signals": [
+        {{
+          "signal": "...",
+          "side": "solution_gap",
+          "weight": 25,
+          "sources": [
+            {{
+              "name": "BuiltWith.com",
+              "difficulty": "easy",
+              "how_to_find": "Go to builtwith.com, enter business website URL. Look under CMS/Chat/eCommerce for any {technology}-related tool."
+            }}
+          ],
+          "confirmed_if": "..."
+        }}
+      ]
+    }}
+  ],
+  "section3_lead_sources": [
+    {{
+      "platform": "Google Maps",
+      "search_keyword": "...",
+      "why": "...",
+      "estimated_volume": "high",
+      "filter_tip": "...",
+      "is_primary": true
+    }}
+  ]
+}}"""
+
+def _parse_prospect_intel_response(response: str) -> dict:
+    clean = response.strip()
+    clean = re.sub(r'^```(?:json)?\s*', '', clean)
+    clean = re.sub(r'\s*```$', '', clean)
+    clean = clean.strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        m = re.search(r'\{[\s\S]*\}', clean)
+        if m:
+            return json.loads(m.group())
+    return None
+
+@app.post("/prospect-intel/generate")
+async def generate_prospect_intel(request: ProspectIntelRequest):
+    from market_research import nvidia_chat
+
+    if not request.technology.strip():
+        raise HTTPException(status_code=400, detail="Technology keyword is required")
+
+    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}"
+    cached = db_manager.load_market_result("prospect_intel", request.technology, cache_key_raw)
+    if cached:
+        return cached
+
+    prompt = make_prospect_intel_prompt(request.technology, request.industry or "")
+    response = nvidia_chat(prompt, max_tokens=6000)
+
+    try:
+        result = _parse_prospect_intel_response(response)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM response: {str(e)}")
+
+    if not result:
+        raise HTTPException(status_code=500, detail="LLM returned no parseable JSON")
+
+    db_manager.save_market_result("prospect_intel", request.technology, cache_key_raw, result)
+    return result
+
+@app.post("/prospect-intel/refresh")
+async def refresh_prospect_intel(request: ProspectIntelRequest):
+    from market_research import nvidia_chat
+
+    if not request.technology.strip():
+        raise HTTPException(status_code=400, detail="Technology keyword is required")
+
+    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}"
+    db_manager.load_market_result("prospect_intel", request.technology, cache_key_raw)
+
+    prompt = make_prospect_intel_prompt(request.technology, request.industry or "")
+    response = nvidia_chat(prompt, max_tokens=6000)
+
+    try:
+        result = _parse_prospect_intel_response(response)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM response: {str(e)}")
+
+    if not result:
+        raise HTTPException(status_code=500, detail="LLM returned no parseable JSON")
+
+    db_manager.save_market_result("prospect_intel", request.technology, cache_key_raw, result)
+    return result
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "mode": "cloud"}
