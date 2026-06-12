@@ -833,99 +833,99 @@ async def get_cached_signal_plan(industry: str, campaign_key: str = ""):
 # ─── Prospect Intelligence Endpoint ───────────────────────────────────────────
 
 class ProspectIntelRequest(BaseModel):
-    technology: str       # e.g. "chatbots", "voice agents", "website development"
-    industry: Optional[str] = ""  # optional, empty = all industries
+    technology: str
+    industry: Optional[str] = ""
+    departments: Optional[list] = []   # selected department slugs; empty = all
 
-def make_prospect_intel_prompt(technology: str, industry: str) -> str:
+
+DEPARTMENT_MAP = {
+    "logistics_supply_chain":   "Core Logistics & Supply Chain (Logistics Managers, Supply Chain Directors)",
+    "warehousing_inventory":    "Warehousing & Inventory (Warehouse Managers, Inventory Controllers)",
+    "transport_dispatch":       "Transport & Dispatch (Fleet Managers, Dispatchers)",
+    "procurement_sourcing":     "Procurement & Sourcing (Procurement Managers, Sourcing Analysts)",
+    "cross_functional":         "Cross-Functional Support (IT, Finance, HR, Operations)",
+    "external_stakeholders":    "External Stakeholders (Customers, Vendors, Carriers, Partners)",
+}
+
+
+def make_prospect_intel_prompt(technology: str, industry: str, departments: list = None) -> str:
     industry_scope = f"the {industry} industry" if industry else "all industries"
+
+    if departments and "all" not in departments:
+        dept_labels = [DEPARTMENT_MAP.get(d, d) for d in departments if d in DEPARTMENT_MAP]
+        dept_context = "Focus ONLY on these departments/stakeholders:\n" + "\n".join(f"- {d}" for d in dept_labels)
+    else:
+        dept_labels = list(DEPARTMENT_MAP.values())
+        dept_context = "Cover ALL departments:\n" + "\n".join(f"- {d}" for d in dept_labels)
+
     return f"""You are a senior B2B sales strategist and market intelligence analyst.
 
 A company sells: {technology}
 Target market: {industry_scope}
+Department focus:
+{dept_context}
 
 Generate a structured Prospect Intelligence Report with exactly THREE sections.
 
 ═══ SECTION 1 — PAIN POINTS ═══
-Generate minimum 5 pain points that "{technology}" directly solves for {industry_scope}.
+Generate minimum 5 pain points that \"{technology}\" directly solves for {industry_scope}.
 For each pain point:
 - title: short compelling name (max 6 words)
 - description: 2-3 sentences explaining the real-world business problem
-- revenue_impact: specific stat or estimate e.g. "businesses report 23% reduction in missed bookings after implementing this" — be specific and realistic
+- revenue_impact: specific stat e.g. "businesses report 23% reduction in missed bookings after implementing this"
 - frequency: one of "very common" / "common" / "occasional"
 - why_tech_solves: 1 sentence explaining exactly how {technology} fixes this pain
+- who_feels_pain: list of departments and job titles who experience this pain daily. Format: [{{"department": "...", "job_titles": ["...", "..."]}}]
+  Only include departments from the department focus above.
 
 ═══ SECTION 2 — SIGNAL DETECTION PLAN ═══
-For EACH pain point above, generate signals to prove a specific business is facing that problem and does NOT already have {technology} in place.
-Two sides per pain point:
+For EACH pain point above, generate signals proving a business faces that problem and lacks {technology}.
+SIDE 1 (solution_gap): proof business has NO {technology} installed.
+SIDE 2 (problem_evidence): external proof the pain EXISTS.
 
-SIDE 1 (solution_gap): proof business has NO {technology} already installed.
-SIDE 2 (problem_evidence): external proof the pain EXISTS for that business.
+For each signal block also include:
+- who_to_contact: the specific department and job title to reach when this signal is confirmed.
+  Format: {{"department": "...", "job_title": "...", "why": "1 sentence on why this person is the right contact"}}
 
-ALLOWED SOURCES ONLY (no login required), in priority order:
-1. Business website (direct URL)
-2. Google Maps listing (public GMB card)
-3. Google Search snippet (read snippet only without clicking)
-4. BuiltWith.com / Wappalyzer (detects installed tech stack publicly)
-5. Yelp / TripAdvisor / Trustpilot public pages
-6. OpenTable / Resy / Zomato public listings
-7. Indeed / LinkedIn public job search (no login)
-8. Google Jobs panel in SERP
-9. Google News search
-10. Yellow Pages / Foursquare / Bark.com public profiles
-11. Glassdoor public listings
-12. Similarweb public overview
-
-FACEBOOK/INSTAGRAM: search "[business name] facebook" on Google, read snippet only. Do NOT visit FB/IG directly.
-
-RULES:
-- Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer)
-- Signal weights per pain point sum to 100%
-- Side 1 signals: 20-30% weight each
-- Side 2 signals: 10-20% weight each
-- how_to_find must be exact step-by-step, not vague
+ALLOWED SOURCES ONLY (no login): Business website, Google Maps, Google Search snippet,
+BuiltWith.com/Wappalyzer, Yelp/TripAdvisor/Trustpilot, OpenTable/Resy/Zomato,
+Indeed/LinkedIn public job search, Google Jobs SERP, Google News, Yellow Pages/Foursquare/Bark.com,
+Glassdoor public, Similarweb public. For Facebook/Instagram: Google Search snippet only.
+Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer). Weights sum to 100%.
 
 ═══ SECTION 3 — AUDIENCE & LEAD SOURCES ═══
-Generate a lead sourcing plan to find businesses facing these pain points.
-Include 5-7 sources.
-For each source:
-- platform: name of platform
-- search_keyword: exact search string to use on that platform
-- why: 1 sentence explaining why this surfaces the right businesses
-- estimated_volume: "high" / "medium" / "low"
-- filter_tip: how to filter results to find best matches
-- is_primary: true for Google Maps (always include as first/primary source)
+Generate a lead sourcing plan — 5-7 sources.
+For each source: platform, search_keyword, why, estimated_volume, filter_tip, is_primary, AND:
+- decision_maker: who to email/call. Format: {{"job_title": "...", "department": "...", "why": "...", "how_to_find": "LinkedIn search tip or Google operator"}}
 
-Always include Google Maps as primary with exact keyword format: "[industry] [city/region]"
+Google Maps is always primary with format: "[industry] [city/region]"
 
 ═══ OUTPUT FORMAT ═══
-Respond ONLY with valid JSON. No markdown fences. Exact structure:
+Respond ONLY with valid JSON. No markdown fences:
 {{
   "technology": "{technology}",
   "industry": "{industry_scope}",
+  "departments_targeted": ["list of department slugs targeted"],
   "section1_pain_points": [
     {{
       "title": "...",
       "description": "...",
       "revenue_impact": "...",
       "frequency": "very common",
-      "why_tech_solves": "..."
+      "why_tech_solves": "...",
+      "who_feels_pain": [{{"department": "...", "job_titles": ["...", "..."]}}]
     }}
   ],
   "section2_signals": [
     {{
-      "pain_point_title": "title matching section1",
+      "pain_point_title": "...",
+      "who_to_contact": {{"department": "...", "job_title": "...", "why": "..."}},
       "signals": [
         {{
           "signal": "...",
           "side": "solution_gap",
           "weight": 25,
-          "sources": [
-            {{
-              "name": "BuiltWith.com",
-              "difficulty": "easy",
-              "how_to_find": "Go to builtwith.com, enter business website URL. Look under CMS/Chat/eCommerce for any {technology}-related tool."
-            }}
-          ],
+          "sources": [{{"name": "BuiltWith.com", "difficulty": "easy", "how_to_find": "..."}}],
           "confirmed_if": "..."
         }}
       ]
@@ -938,10 +938,12 @@ Respond ONLY with valid JSON. No markdown fences. Exact structure:
       "why": "...",
       "estimated_volume": "high",
       "filter_tip": "...",
-      "is_primary": true
+      "is_primary": true,
+      "decision_maker": {{"job_title": "...", "department": "...", "why": "...", "how_to_find": "..."}}
     }}
   ]
 }}"""
+
 
 @app.post("/prospect-intel/generate")
 async def generate_prospect_intel(request: ProspectIntelRequest):
@@ -952,12 +954,12 @@ async def generate_prospect_intel(request: ProspectIntelRequest):
         raise HTTPException(status_code=400, detail="Technology keyword is required")
 
     # Check cache
-    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}"
+    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}:{','.join(sorted(request.departments or []))}"
     cached = db_manager.load_market_result("prospect_intel", request.technology, cache_key_raw)
     if cached:
         return cached
 
-    prompt = make_prospect_intel_prompt(request.technology, request.industry or "")
+    prompt = make_prospect_intel_prompt(request.technology, request.industry or "", request.departments or [])
     response = nvidia_chat(prompt, max_tokens=6000)
 
     result = None

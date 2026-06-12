@@ -9,6 +9,36 @@ import {
 
 const API = '/api';
 
+// ── Department options ────────────────────────────────────────────────────────
+const DEPT_OPTIONS = [
+  { slug: 'logistics_supply_chain', label: 'Core Logistics & Supply Chain',  sub: 'Logistics Managers, Supply Chain Directors',  color: '#60a5fa' },
+  { slug: 'warehousing_inventory',  label: 'Warehousing & Inventory',        sub: 'Warehouse Managers, Inventory Controllers',    color: '#fbbf24' },
+  { slug: 'transport_dispatch',     label: 'Transport & Dispatch',            sub: 'Fleet Managers, Dispatchers',                  color: '#34d399' },
+  { slug: 'procurement_sourcing',   label: 'Procurement & Sourcing',          sub: 'Procurement Managers, Sourcing Analysts',      color: '#a78bfa' },
+  { slug: 'cross_functional',       label: 'Cross-Functional Support',        sub: 'IT, Finance, HR, Operations',                  color: '#f87171' },
+  { slug: 'external_stakeholders',  label: 'External Stakeholders',           sub: 'Customers, Vendors, Carriers, Partners',       color: '#fb923c' },
+];
+
+function deptColor(slug) {
+  return DEPT_OPTIONS.find(d => d.slug === slug)?.color || '#888';
+}
+
+function DeptBadge({ dept, size = 'sm' }) {
+  const d = DEPT_OPTIONS.find(o => o.slug === dept || o.label === dept);
+  const color = d?.color || '#888';
+  const label = d?.label || dept;
+  return (
+    <span style={{
+      background: `${color}15`, border: `1px solid ${color}44`,
+      color, fontSize: size === 'xs' ? '0.6rem' : '0.68rem', fontWeight: 700,
+      padding: size === 'xs' ? '1px 6px' : '2px 8px', borderRadius: '20px',
+      whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px'
+    }}>
+      <Users size={size === 'xs' ? 9 : 10} /> {label}
+    </span>
+  );
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 function getConfColor(score) {
   if (score >= 81) return { bg: 'rgba(255,80,0,0.15)', border: 'rgba(255,80,0,0.4)', text: '#ff6020', label: 'HOT' };
@@ -131,6 +161,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   // Inputs
   const [technology, setTechnology] = useState('');
   const [industry, setIndustry] = useState('');
+  const [departments, setDepartments] = useState([]); // selected dept slugs
   const [submitted, setSubmitted] = useState(null);
 
   // Generation state
@@ -243,12 +274,12 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
     setData(null);
     setScoredLeads([]);
     setScrapeLeads([]);
-    const sub = { technology: technology.trim(), industry: industry.trim() };
+    const sub = { technology: technology.trim(), industry: industry.trim(), departments: departments };
     setSubmitted(sub);
 
     try {
       const endpoint = forceRefresh ? `${API}/prospect-intel/refresh` : `${API}/prospect-intel/generate`;
-      const res = await axios.post(endpoint, { technology: sub.technology, industry: sub.industry });
+      const res = await axios.post(endpoint, { technology: sub.technology, industry: sub.industry, departments: sub.departments });
       setData(res.data);
       setFromCache(!forceRefresh);
 
@@ -477,6 +508,51 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                 placeholder="e.g. restaurants, real estate" style={{ paddingLeft: '30px' }} />
             </div>
           </div>
+
+          {/* Department / Stakeholder Focus */}
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label>
+              Department / Stakeholder Focus
+              <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0, marginLeft: '6px' }}>(optional — select all that apply)</span>
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+              {DEPT_OPTIONS.map(opt => {
+                const selected = departments.includes(opt.slug);
+                return (
+                  <button key={opt.slug} type="button"
+                    onClick={() => setDepartments(prev =>
+                      prev.includes(opt.slug) ? prev.filter(d => d !== opt.slug) : [...prev, opt.slug]
+                    )}
+                    style={{
+                      margin: 0, width: 'auto', padding: '5px 12px',
+                      background: selected ? `${opt.color}18` : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${selected ? opt.color : 'rgba(255,255,255,0.1)'}`,
+                      color: selected ? opt.color : 'var(--text-muted)',
+                      borderRadius: '20px', fontSize: '0.78rem', fontWeight: selected ? 700 : 400,
+                      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '1px',
+                      transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0,
+                      transition: 'all 0.15s ease', cursor: 'pointer'
+                    }}>
+                    <span>{opt.label}</span>
+                    <span style={{ fontSize: '0.65rem', opacity: 0.7, fontWeight: 400 }}>{opt.sub}</span>
+                  </button>
+                );
+              })}
+              {departments.length > 0 && (
+                <button type="button"
+                  onClick={() => setDepartments([])}
+                  style={{ margin: 0, width: 'auto', padding: '5px 12px', background: 'rgba(220,53,69,0.08)', border: '1px solid rgba(220,53,69,0.25)', color: '#ff6b6b', borderRadius: '20px', fontSize: '0.72rem', transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0 }}>
+                  Clear all ×
+                </button>
+              )}
+            </div>
+            {departments.length === 0 && (
+              <p style={{ margin: '4px 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                None selected = All Departments (default)
+              </p>
+            )}
+          </div>
+
           <div className="pi-form-actions">
             <button type="submit" disabled={loading || !technology.trim()} className="pi-btn-primary">
               {loading ? <Loader size={15} className="animate-spin" /> : <Search size={15} />}
@@ -529,6 +605,13 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
             </div>
           ))}
           {fromCache && <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#39ff14', background: 'rgba(40,167,69,0.1)', border: '1px solid rgba(40,167,69,0.3)', padding: '2px 10px', borderRadius: '20px' }}>✓ From Supabase cache</span>}
+          {/* Departments targeted */}
+          {submitted.departments?.length > 0 && (
+            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Dept Focus:</span>
+              {submitted.departments.map(slug => <DeptBadge key={slug} dept={slug} size="xs" />)}
+            </div>
+          )}
         </div>
       )}
 
@@ -558,6 +641,25 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                       <div style={{ fontSize: '0.83rem', color: '#ddd6fe' }}>{pp.why_tech_solves}</div>
                     </div>
                   </div>
+
+                  {/* Who Feels This Pain */}
+                  {pp.who_feels_pain?.length > 0 && (
+                    <div style={{ marginTop: '0.65rem', background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.15)', borderRadius: '7px', padding: '0.6rem 0.75rem' }}>
+                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Users size={10} /> Who Feels This Pain
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        {pp.who_feels_pain.map((wfp, wi) => (
+                          <div key={wi} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                            <DeptBadge dept={wfp.department} size="xs" />
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {Array.isArray(wfp.job_titles) ? wfp.job_titles.join(', ') : wfp.job_titles}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -585,13 +687,26 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                 return (
                   <div key={bi} style={{ background: 'rgba(138,43,226,0.04)', border: '1px solid rgba(138,43,226,0.18)', borderRadius: '10px', overflow: 'hidden' }}>
                     <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid rgba(138,43,226,0.12)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
                         <AlertCircle size={14} style={{ color: '#f87171' }} />
                         <span style={{ fontWeight: 700, color: 'var(--gold-primary)', fontSize: '0.92rem' }}>{block.pain_point_title}</span>
                       </div>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                        {totalW}% total weight
-                      </span>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {/* Who to Contact */}
+                        {block.who_to_contact && (
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '8px', padding: '3px 10px' }}>
+                            <Users size={11} style={{ color: '#60a5fa', flexShrink: 0 }} />
+                            <div>
+                              <span style={{ fontSize: '0.6rem', color: '#60a5fa', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block' }}>Contact</span>
+                              <span style={{ fontSize: '0.75rem', color: '#fff', fontWeight: 600 }}>{block.who_to_contact.job_title}</span>
+                              {block.who_to_contact.department && <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: '4px' }}>· {block.who_to_contact.department}</span>}
+                            </div>
+                          </div>
+                        )}
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                          {totalW}% total weight
+                        </span>
+                      </div>
                     </div>
                     <div className="pi-signal-grid">
                       <div className="pi-signal-col pi-signal-col--left">
@@ -675,6 +790,28 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                   <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.why}</p>
                   {src.filter_tip && (
                     <p style={{ margin: 0, fontSize: '0.74rem', color: '#60a5fa', lineHeight: 1.4 }}>💡 {src.filter_tip}</p>
+                  )}
+                  {/* Decision Maker to Target */}
+                  {src.decision_maker && (
+                    <div style={{ marginTop: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '6px', padding: '0.5rem 0.7rem' }}>
+                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Users size={9} /> Decision Maker to Target
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>{src.decision_maker.job_title}</span>
+                          {src.decision_maker.department && (
+                            <DeptBadge dept={src.decision_maker.department} size="xs" />
+                          )}
+                          {src.decision_maker.why && (
+                            <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{src.decision_maker.why}</p>
+                          )}
+                          {src.decision_maker.how_to_find && (
+                            <p style={{ margin: '3px 0 0', fontSize: '0.7rem', color: '#fbbf24', lineHeight: 1.4 }}>🔍 {src.decision_maker.how_to_find}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   )}
                   {src.is_primary && (
                     <button onClick={() => setScrapeKeyword(src.search_keyword)}
