@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   Search, Zap, AlertCircle, Shield, Eye, CheckCircle, MapPin,
   ChevronDown, ChevronUp, ChevronRight, Loader, RefreshCw, Download, Send,
-  TrendingUp, Users, Target, Globe, Activity, Filter,
+  TrendingUp, Users, Target, Globe, Activity, Filter, Mail, Phone, LinkIcon,
   BarChart2, Layers, ExternalLink, Play, Database
 } from 'lucide-react';
 
