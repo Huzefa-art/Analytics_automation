@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import axios from 'axios';
 import {
   Search, Zap, AlertCircle, Shield, Eye, CheckCircle, MapPin,
-  ChevronDown, ChevronUp, Loader, RefreshCw, Download, Send,
+  ChevronDown, ChevronUp, ChevronRight, Loader, RefreshCw, Download, Send,
   TrendingUp, Users, Target, Globe, Activity, Filter,
   BarChart2, Layers, ExternalLink, Play, Database
 } from 'lucide-react';
@@ -222,6 +222,12 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   const [scanning, setScanning] = useState(false);
   const [scoredLeads, setScoredLeads] = useState([]);
 
+  // Runner state (Option A/B)
+  const [runnerSource, setRunnerSource] = useState('existing'); // 'existing' | 'fresh'
+  const [freshLocation, setFreshLocation] = useState('');
+  const [freshSources, setFreshSources] = useState(['Google Maps']);
+  const availableSources = ['Google Maps', 'Yellow Pages', 'Yelp', 'Companies House (UK)', 'LinkedIn Company Search', 'Bark.com', 'Clutch.co', 'Facebook Business Pages'];
+
   // Table filters
   const [confThreshold, setConfThreshold] = useState(0);
   const [filterPainPoint, setFilterPainPoint] = useState('all');
@@ -353,82 +359,68 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
     }
   };
 
-  // ── Scrape Leads ─────────────────────────────────────────────────────────
-  const handleScrape = async () => {
-    if (!scrapeKeyword.trim()) return;
+  // ── Signal Runner Orchestration ──────────────────────────────────────────
+  const triggerSignalRunner = async (type = 'existing') => {
+    if (!data?.section2_signals || !submitted) return;
     setScraping(true);
-    setScrapeStatus('Starting scraper…');
-    setScrapeLeads([]);
-    setScoredLeads([]);
+    setScanning(true);
+    setScrapeStatus(type === 'fresh' ? 'Initiating multi-source scrape...' : 'Starting database signal analysis...');
 
     try {
-      await axios.post(`${API}/scrape`, { url: scrapeKeyword.trim(), max_results: scrapeMax });
+      await axios.post(`${API}/prospect-intel/run-signals`, {
+        source: type,
+        industry: type === 'fresh' ? freshIndustry : submitted.industry,
+        location: type === 'fresh' ? freshLocation : '',
+        num_businesses: type === 'fresh' ? freshVolume : 20,
+        sources: type === 'fresh' ? freshSources : ["Google Maps"],
+        signal_plan: data.section2_signals
+      });
 
-      // Poll status
+      // Poll analyzing status
       scrapeIntervalRef.current = setInterval(async () => {
         try {
           const st = await axios.get(`${API}/status`);
-          const s = st.data?.scraping;
+          const s = st.data?.analyzing;
           setScrapeStatus(s?.progress || '');
           if (!s?.active) {
             clearInterval(scrapeIntervalRef.current);
             setScraping(false);
-            setScrapeStatus('Scrape complete — fetching leads…');
-            // Fetch new leads
-            const leadsRes = await axios.get(`${API}/results`);
-            const newLeads = leadsRes.data || [];
-            setScrapeLeads(newLeads);
-            setScrapeStatus(`${newLeads.length} leads loaded — auto-running signal scan…`);
-            // Auto-trigger signal scan after scrape completes
-            if (newLeads.length > 0 && data?.section2_signals) {
-              runSignalScan(newLeads);
-            }
+            setScanning(false);
+            setScrapeStatus('Runner finished — loading results...');
+            // Fetch results
+            const res = await axios.get(`${API}/results`);
+            const normalized = (res.data || []).map(l => {
+              // Map backend signal_evidence to frontend _perPainPoint
+              let ev = {};
+              try {
+                ev = typeof l['Signal Evidence'] === 'string' ? JSON.parse(l['Signal Evidence']) : (l['Signal Evidence'] || {});
+              } catch { ev = {}; }
+
+              return {
+                ...l,
+                _overall: parseInt(l['Overall Score'] || 0),
+                _perPainPoint: ev,
+                _rating: l['Rating'] || 'COLD', // HOT/WARM/COLD
+              };
+            });
+            setScrapeLeads(normalized);
+            setScoredLeads(normalized);
           }
-        } catch { clearInterval(scrapeIntervalRef.current); setScraping(false); }
-      }, 2000);
+        } catch {
+          clearInterval(scrapeIntervalRef.current);
+          setScraping(false);
+          setScanning(false);
+        }
+      }, 2500);
     } catch (err) {
       setScraping(false);
-      setScrapeStatus(err?.response?.data?.detail || 'Scrape failed');
+      setScanning(false);
+      setScrapeStatus(err?.response?.data?.detail || 'Runner failed');
     }
   };
 
-  // ── Core scoring logic (accepts leads directly to avoid stale state) ─────
-  const runSignalScan = (leadsInput) => {
-    const leadsToScore = leadsInput || (scrapeLeads.length > 0 ? scrapeLeads : globalLeads);
-    const signals = data?.section2_signals;
-    if (!leadsToScore.length || !signals) return;
-    setScanning(true);
-
-    const scored = leadsToScore.map(lead => {
-      const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, signals);
-      return { ...lead, _overall: overall, _perPainPoint: perPainPoint };
-    });
-    scored.sort((a, b) => b._overall - a._overall);
-    setScoredLeads(scored);
-    setScanning(false);
-    setScrapeStatus(`${scored.length} leads scored`);
-
-    // Save to Supabase for persistence
-    if (submitted) {
-      try {
-        const toSave = scored.map(l => ({
-          ...Object.fromEntries(Object.entries(l).filter(([k]) => !k.startsWith('_'))),
-          _overall: l._overall,
-          _perPainPoint: l._perPainPoint,
-          _confirmed: l._confirmed,
-          _unconfirmed: l._unconfirmed,
-        }));
-        axios.post('/api/prospect-intel/scan-results', {
-          technology: submitted.technology,
-          industry: submitted.industry,
-          scored_leads: toSave
-        }).catch(() => { });
-      } catch { /* silent — scan still shown even if save fails */ }
-    }
-  };
-
-  // ── Signal Scan (button handler) ──────────────────────────────────────────
-  const handleSignalScan = () => runSignalScan(null);
+  const handleScrape = () => triggerSignalRunner('fresh');
+  const handleSignalScan = () => triggerSignalRunner('existing');
 
   // ── Export CSV ───────────────────────────────────────────────────────────
   const handleExportCSV = () => {
@@ -792,93 +784,142 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
             </div>
           </AccordionSection>
 
-          {/* ── SECTION 3: AUDIENCE & LEAD SOURCES ────────────────────────── */}
-          <AccordionSection title="Section 3 — Audience & Lead Sources" icon={Users} iconColor="#39ff14"
-            status={data.section3_lead_sources?.length ? 'generated' : 'none'}>
-            {/* Scrape control */}
-            <div className="pi-scrape-bar">
-              <div className="pi-form-field">
-                <label style={{ color: '#39ff14' }}>Google Maps Search Keyword</label>
-                <div style={{ position: 'relative' }}>
-                  <MapPin size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#39ff14' }} />
-                  <input type="text" value={scrapeKeyword} onChange={e => setScrapeKeyword(e.target.value)}
-                    placeholder='e.g. "restaurants London" or "real estate agents Manchester"'
-                    style={{ paddingLeft: '30px', borderColor: 'rgba(57,255,20,0.25)' }} />
-                </div>
-              </div>
-              <div style={{ minWidth: '100px' }}>
-                <label>Max Results</label>
-                <input type="number" value={scrapeMax} onChange={e => setScrapeMax(Number(e.target.value))} min={5} max={100} />
-              </div>
-              <button onClick={handleScrape} disabled={scraping || !scrapeKeyword.trim()}
-                style={{ margin: 0, width: 'auto', padding: '0.75rem 1.25rem', background: 'rgba(57,255,20,0.15)', border: '1px solid rgba(57,255,20,0.35)', color: '#39ff14', display: 'flex', alignItems: 'center', gap: '8px', transform: 'none', boxShadow: 'none' }}>
-                {scraping ? <Loader size={14} className="animate-spin" /> : <Play size={14} />}
-                {scraping ? 'Scraping…' : 'Scrape Leads'}
-              </button>
-            </div>
-            {scrapeStatus && (
-              <div style={{ fontSize: '0.78rem', color: scraping ? '#60a5fa' : '#39ff14', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {scraping && <Loader size={11} className="animate-spin" />}{scrapeStatus}
-              </div>
-            )}
+          {/* ── SECTION 3: SIGNAL DETECTION RUNNER ────────────────────────── */}
+          <AccordionSection title="Section 3 — Signal Detection Runner" icon={Zap} iconColor="#ffdf00"
+            status={(scoredLeads.length || scraping) ? 'generated' : 'none'}>
 
-            {/* Source cards */}
-            <div className="pi-source-grid">
-              {(data.section3_lead_sources || []).map((src, i) => (
-                <div key={i} style={{
-                  background: src.is_primary ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
-                  border: `1px solid ${src.is_primary ? 'rgba(212,175,55,0.25)' : 'rgba(255,255,255,0.07)'}`,
-                  borderRadius: '8px', padding: '0.85rem 1rem'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {src.is_primary && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--gold-primary)', background: 'rgba(212,175,55,0.15)', padding: '1px 6px', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.3)' }}>PRIMARY</span>}
-                      <strong style={{ fontSize: '0.88rem', color: src.is_primary ? 'var(--gold-primary)' : '#fff' }}>{src.platform}</strong>
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid var(--border-color)', padding: '1.25rem' }}>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ color: 'var(--gold-primary)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.8rem', display: 'block' }}>
+                  Step 1 — Source Selection
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div
+                    onClick={() => setRunnerSource('existing')}
+                    style={{
+                      padding: '1rem', borderRadius: '10px', border: `1px solid ${runnerSource === 'existing' ? 'var(--gold-primary)' : 'rgba(255,255,255,0.1)'}`,
+                      background: runnerSource === 'existing' ? 'rgba(212,175,55,0.1)' : 'rgba(0,0,0,0.2)', cursor: 'pointer', transition: 'all 0.2s'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: runnerSource === 'existing' ? 'var(--gold-primary)' : '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Database size={16} /> Option A: Existing Leads
                     </div>
-                    <span style={{
-                      fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '10px',
-                      color: src.estimated_volume === 'high' ? '#39ff14' : src.estimated_volume === 'medium' ? '#ffdf00' : '#a78bfa',
-                      background: src.estimated_volume === 'high' ? 'rgba(57,255,20,0.1)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.1)' : 'rgba(167,139,250,0.1)',
-                      border: `1px solid ${src.estimated_volume === 'high' ? 'rgba(57,255,20,0.3)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.3)' : 'rgba(167,139,250,0.3)'}`
-                    }}>{src.estimated_volume} volume</span>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '5px 0 0' }}>Run signal analysis on leads already in your central database.</p>
                   </div>
-                  <code style={{ fontSize: '0.8rem', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', padding: '3px 8px', borderRadius: '4px', display: 'block', marginBottom: '0.5rem', fontFamily: 'monospace' }}>
-                    {src.search_keyword}
-                  </code>
-                  <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.why}</p>
-                  {src.filter_tip && (
-                    <p style={{ margin: 0, fontSize: '0.74rem', color: '#60a5fa', lineHeight: 1.4 }}>💡 {src.filter_tip}</p>
-                  )}
-                  {/* Decision Maker to Target */}
-                  {src.decision_maker && (
-                    <div style={{ marginTop: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '6px', padding: '0.5rem 0.7rem' }}>
-                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Users size={9} /> Decision Maker to Target
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
-                        <div style={{ flex: 1 }}>
-                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>{src.decision_maker.job_title}</span>
-                          {src.decision_maker.department && (
-                            <DeptBadge dept={src.decision_maker.department} options={deptOptions} size="xs" />
-                          )}
-                          {src.decision_maker.why && (
-                            <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{src.decision_maker.why}</p>
-                          )}
-                          {src.decision_maker.how_to_find && (
-                            <p style={{ margin: '3px 0 0', fontSize: '0.7rem', color: '#fbbf24', lineHeight: 1.4 }}>🔍 {src.decision_maker.how_to_find}</p>
-                          )}
-                        </div>
-                      </div>
+                  <div
+                    onClick={() => setRunnerSource('fresh')}
+                    style={{
+                      padding: '1rem', borderRadius: '10px', border: `1px solid ${runnerSource === 'fresh' ? 'var(--gold-primary)' : 'rgba(255,255,255,0.1)'}`,
+                      background: runnerSource === 'fresh' ? 'rgba(212,175,55,0.1)' : 'rgba(0,0,0,0.2)', cursor: 'pointer', transition: 'all 0.2s'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: runnerSource === 'fresh' ? 'var(--gold-primary)' : '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Search size={16} /> Option B: Fresh Scrape
                     </div>
-                  )}
-                  {src.is_primary && (
-                    <button onClick={() => setScrapeKeyword(src.search_keyword)}
-                      style={{ marginTop: '8px', marginBottom: 0, width: 'auto', padding: '3px 10px', fontSize: '0.72rem', background: 'rgba(212,175,55,0.12)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', borderRadius: '6px', transform: 'none', boxShadow: 'none' }}>
-                      Use this keyword ↑
-                    </button>
-                  )}
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '5px 0 0' }}>Scrape new businesses from multiple live sources, then run signals.</p>
+                  </div>
                 </div>
-              ))}
+              </div>
+
+              {runnerSource === 'fresh' && (
+                <div className="animate-fade-in" style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <label style={{ color: 'var(--gold-primary)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '1rem', display: 'block' }}>
+                    Step 2 — Fresh Scrape Configuration
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div className="pi-form-field">
+                      <label>Industry</label>
+                      <input type="text" value={freshIndustry} onChange={e => setFreshIndustry(e.target.value)} placeholder="e.g. real estate" />
+                    </div>
+                    <div className="pi-form-field">
+                      <label>Location</label>
+                      <input type="text" value={freshLocation} onChange={e => setFreshLocation(e.target.value)} placeholder="e.g. London, UK" />
+                    </div>
+                    <div className="pi-form-field">
+                      <label>Number of Businesses</label>
+                      <input type="number" value={scrapeMax} onChange={e => setScrapeMax(Number(e.target.value))} min={5} max={100} />
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '1rem' }}>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff', marginBottom: '8px', display: 'block' }}>Sources to scrape from:</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px' }}>
+                      {availableSources.map(src => (
+                        <label key={src} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={freshSources.includes(src)}
+                            onChange={e => setFreshSources(prev => e.target.checked ? [...prev, src] : prev.filter(s => s !== src))}
+                          />
+                          {src}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
+                <button
+                  onClick={runnerSource === 'existing' ? handleSignalScan : handleScrape}
+                  disabled={scraping || scanning || (runnerSource === 'fresh' && (!freshIndustry || !freshLocation))}
+                  style={{
+                    margin: 0, width: 'auto', padding: '0.85rem 2rem', background: 'var(--gold-primary)', color: '#000',
+                    fontWeight: 800, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px', transform: 'scale(1.02)'
+                  }}
+                >
+                  {(scraping || scanning) ? <Loader size={18} className="animate-spin" /> : <Play size={18} fill="currentColor" />}
+                  {runnerSource === 'existing' ? 'Run Signal Detection' : 'Start Fresh Scrape & Analysis'}
+                </button>
+              </div>
+
+              {(scrapeStatus || scanning) && (
+                <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Loader size={16} className="animate-spin" style={{ color: '#60a5fa' }} />
+                  <span style={{ fontSize: '0.85rem', color: '#60a5fa', fontWeight: 600 }}>{scrapeStatus || 'Scoring leads against intelligence detection plan…'}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Strategy Context (Original Cards) */}
+            <div style={{ marginTop: '1.5rem' }}>
+              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '1rem', display: 'block', textTransform: 'uppercase' }}>
+                AI Strategy Guidance
+              </label>
+              <div className="pi-source-grid">
+                {(data.section3_lead_sources || []).map((src, i) => (
+                  <div key={i} style={{
+                    background: src.is_primary ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
+                    border: `1px solid ${src.is_primary ? 'rgba(212,175,55,0.25)' : 'rgba(255,255,255,0.07)'}`,
+                    borderRadius: '8px', padding: '0.85rem 1rem'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {src.is_primary && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--gold-primary)', background: 'rgba(212,175,55,0.15)', padding: '1px 6px', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.3)' }}>PRIMARY</span>}
+                        <strong style={{ fontSize: '0.88rem', color: src.is_primary ? 'var(--gold-primary)' : '#fff' }}>{src.platform}</strong>
+                      </div>
+                      <span style={{
+                        fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '10px',
+                        color: src.estimated_volume === 'high' ? '#39ff14' : src.estimated_volume === 'medium' ? '#ffdf00' : '#a78bfa',
+                        background: src.estimated_volume === 'high' ? 'rgba(57,255,20,0.1)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.1)' : 'rgba(167,139,250,0.1)',
+                        border: `1px solid ${src.estimated_volume === 'high' ? 'rgba(57,255,20,0.3)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.3)' : 'rgba(167,139,250,0.3)'}`
+                      }}>{src.estimated_volume} volume</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginBottom: '0.5rem' }}>
+                      <Search size={12} style={{ color: 'var(--gold-primary)', marginTop: '3px' }} />
+                      <code style={{ fontSize: '0.78rem', color: 'var(--gold-primary)', fontWeight: 600 }}>{src.search_keyword}</code>
+                    </div>
+                    <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.why}</p>
+                    {src.decision_maker && (
+                      <div style={{ marginTop: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '6px', padding: '0.5rem 0.7rem' }}>
+                        <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Users size={9} /> Decision Maker to Target
+                        </div>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>{src.decision_maker.job_title}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </AccordionSection>
 
@@ -933,24 +974,31 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                             if (e.target.checked) setSelectedLeads(new Set(filteredScored.map((_, i) => i)));
                             else setSelectedLeads(new Set());
                           }} /></th>
-                          <th style={thStyle}>Business</th>
-                          <th style={thStyle}>Industry</th>
-                          <th style={thStyle}>Contact</th>
-                          <th style={thStyle}>Overall</th>
-                          {painTitles.map((pt, i) => <th key={i} style={{ ...thStyle, maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pt}>{pt.length > 18 ? pt.slice(0, 16) + '…' : pt}</th>)}
+                          <th style={thStyle}>Business & Website</th>
+                          <th style={thStyle}>Category</th>
+                          <th style={thStyle}>Contact Info</th>
+                          <th style={thStyle}>Rating</th>
+                          <th style={thStyle}>Signal Score</th>
+                          <th style={thStyle}>Evidence & Transformation</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filteredScored.map((lead, idx) => {
                           const name = lead['Business Name'] || lead['business_name'] || '—';
-                          const industry = lead['Industry'] || lead['industry'] || '—';
+                          const category = lead['Category'] || lead['industry'] || '—';
                           const email = lead['Email'] || lead['email'] || '';
                           const phone = lead['Phone'] || lead['phone'] || '';
                           const website = lead['Website'] || lead['website'] || '';
-                          const cc = getConfColor(lead._overall);
+                          const score = lead._overall || 0;
+
+                          // Hot/Warm/Cold
+                          let rating = { label: 'COLD', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' };
+                          if (score >= 80) rating = { label: 'HOT', color: '#ff4d4d', bg: 'rgba(255, 77, 77, 0.15)' };
+                          else if (score >= 45) rating = { label: 'WARM', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
+
                           const isSelected = selectedLeads.has(idx);
                           return (
-                            <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent' }}>
+                            <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                               <td style={tdStyle}>
                                 <input type="checkbox" checked={isSelected} onChange={e => {
                                   const ns = new Set(selectedLeads);
@@ -959,107 +1007,165 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                                 }} />
                               </td>
                               <td style={tdStyle}>
-                                <div style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem' }}>{name}</div>
-                                {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
-                                  <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 30)}
+                                <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.88rem' }}>{name}</div>
+                                {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.72rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '3px', opacity: 0.8 }}>
+                                  <LinkIcon size={10} /> {website.replace(/^https?:\/\//, '').split('/')[0]}
                                 </a>}
                               </td>
-                              <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>{industry}</td>
-                              <td style={tdStyle}>
-                                {email && email !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#60a5fa' }}>✉ {email}</div>}
-                                {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#a78bfa' }}>☎ {phone}</div>}
+                              <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                <span style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{category}</span>
                               </td>
-                              <td style={tdStyle}><ConfBadge score={lead._overall} /></td>
-                              {painTitles.map((pt, pi) => {
-                                const ppData = lead._perPainPoint?.[pt];
-                                const score = ppData?.score || 0;
-                                const cc2 = getConfColor(score);
-                                return (
-                                  <td key={pi} style={tdStyle}>
-                                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: cc2.text }}>{score}%</div>
-                                    <div style={{ display: 'flex', gap: '2px', marginTop: '2px', flexWrap: 'wrap' }}>
-                                      {ppData?.confirmed?.map((s, si) => (
-                                        <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#39ff14', display: 'inline-block' }} />
-                                      ))}
-                                      {ppData?.unconfirmed?.map((s, si) => (
-                                        <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block' }} />
-                                      ))}
+                              <td style={tdStyle}>
+                                {email && email !== 'N/A' ? (
+                                  <div style={{ fontSize: '0.75rem', color: '#fff', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <Mail size={10} style={{ color: 'var(--gold-primary)' }} /> {email}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: '0.7rem', color: '#ff6b6b', fontStyle: 'italic' }}>Email missing</div>
+                                )}
+                                {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <Phone size={10} /> {phone}
+                                </div>}
+                              </td>
+                              <td style={tdStyle}>
+                                <div style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px',
+                                  background: rating.bg, color: rating.color, border: `1px solid ${rating.color}44`, fontWeight: 800, fontSize: '0.68rem', letterSpacing: '0.5px'
+                                }}>
+                                  <Zap size={10} fill="currentColor" /> {rating.label}
+                                </div>
+                              </td>
+                              <td style={tdStyle}>
+                                <div style={{ fontSize: '1rem', fontWeight: 800, color: '#fff' }}>{score}%</div>
+                                <div style={{ width: '60px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '4px', position: 'relative' }}>
+                                  <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${score}%`, background: rating.color, borderRadius: '2px' }} />
+                                </div>
+                              </td>
+                              <td style={{ ...tdStyle, width: '400px', padding: '1rem' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                  {/* Evidence */}
+                                  <div>
+                                    <div style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--gold-primary)', textTransform: 'uppercase', marginBottom: '4px' }}>Signal Evidence</div>
+                                    <div style={{ fontSize: '0.78rem', color: '#e0e0e0', lineHeight: 1.4, background: 'rgba(212,175,55,0.06)', padding: '6px', borderRadius: '6px', borderLeft: '3px solid var(--gold-primary)' }}>
+                                      {lead['Signal Evidence'] || lead.signal_evidence || 'No direct evidence captured. Auto-scored based on tech detection.'}
                                     </div>
-                                  </td>
-                                );
-                              })}
+                                  </div>
+                                  {/* Process */}
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                    <div>
+                                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>Current Process</div>
+                                      <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px' }}>
+                                        {lead['Current Process'] || lead.current_process || 'Manual handling…'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase' }}>After Chatbot</div>
+                                      <div style={{ fontSize: '0.72rem', color: 'rgba(57,255,20,0.8)', marginTop: '2px' }}>
+                                        {lead['After Chatbot'] || lead.after_chatbot || 'Real-time automation…'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
                     {filteredScored.length === 0 && (
-                      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                        No leads above {confThreshold}% confidence. Lower the slider or run a new scrape.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pi-mobile-leads">
-                    {filteredScored.map((lead, idx) => {
-                      const name = lead['Business Name'] || lead['business_name'] || '—';
-                      const industry = lead['Industry'] || lead['industry'] || '—';
-                      const email = lead['Email'] || lead['email'] || '';
-                      const phone = lead['Phone'] || lead['phone'] || '';
-                      const website = lead['Website'] || lead['website'] || '';
-                      const isSelected = selectedLeads.has(idx);
-                      return (
-                        <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
-                          <div className="pi-lead-card-top">
-                            <label className="pi-lead-check">
-                              <input type="checkbox" checked={isSelected} onChange={e => {
-                                const ns = new Set(selectedLeads);
-                                e.target.checked ? ns.add(idx) : ns.delete(idx);
-                                setSelectedLeads(ns);
-                              }} />
-                            </label>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div className="pi-lead-name">{name}</div>
-                              <div className="pi-lead-meta">{industry}</div>
-                            </div>
-                            <ConfBadge score={lead._overall} />
-                          </div>
-                          {(email || phone) && (
-                            <div className="pi-lead-contact">
-                              {email && email !== 'N/A' && <span>✉ {email}</span>}
-                              {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
-                            </div>
-                          )}
-                          {website && website !== 'N/A' && (
-                            <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
-                              <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
-                            </a>
-                          )}
-                          {painTitles.length > 0 && (
-                            <div className="pi-lead-scores">
-                              {painTitles.map((pt, pi) => {
-                                const score = lead._perPainPoint?.[pt]?.score || 0;
-                                const cc2 = getConfColor(score);
-                                return (
-                                  <div key={pi} className="pi-lead-score-row">
-                                    <span className="pi-lead-score-label" title={pt}>{pt}</span>
-                                    <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
+                      <div style={{ padding: '3rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', marginTop: '1rem' }}>
+                        <Database size={30} style={{ color: 'rgba(255,255,255,0.1)', marginBottom: '1rem' }} />
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                          No leads found matching your criteria. Try adjusting the score slider or run a fresh scrape.
                         </div>
-                      );
-                    })}
-                    {filteredScored.length === 0 && (
-                      <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                        No leads above {confThreshold}% confidence.
                       </div>
                     )}
                   </div>
                 </>
               )}
+
+              <div className="pi-mobile-leads">
+                {filteredScored.map((lead, idx) => {
+                  const name = lead['Business Name'] || lead['business_name'] || '—';
+                  const industry = lead['Industry'] || lead['industry'] || '—';
+                  const email = lead['Email'] || lead['email'] || '';
+                  const phone = lead['Phone'] || lead['phone'] || '';
+                  const website = lead['Website'] || lead['website'] || '';
+                  const isSelected = selectedLeads.has(idx);
+                  return (
+                    <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
+                      <div className="pi-lead-card-top">
+                        <label className="pi-lead-check">
+                          <input type="checkbox" checked={isSelected} onChange={e => {
+                            const ns = new Set(selectedLeads);
+                            e.target.checked ? ns.add(idx) : ns.delete(idx);
+                            setSelectedLeads(ns);
+                          }} />
+                        </label>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="pi-lead-name">{name}</div>
+                          <div className="pi-lead-meta">{industry}</div>
+                        </div>
+                        <ConfBadge score={lead._overall} />
+                      </div>
+                      {(email || phone) && (
+                        <div className="pi-lead-contact">
+                          {email && email !== 'N/A' && <span>✉ {email}</span>}
+                          {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
+                        </div>
+                      )}
+                      {website && website !== 'N/A' && (
+                        <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
+                          <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
+                        </a>
+                      )}
+                      <div className="pi-lead-scores">
+                        {painTitles.map((pt, pi) => {
+                          const pData = lead._perPainPoint?.[pt] || {};
+                          const score = pData.score || 0;
+                          const evidence = pData.evidence || '';
+                          const cc2 = getConfColor(score);
+                          return (
+                            <div key={pi} className="pi-lead-score-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <span className="pi-lead-score-label" title={pt}>{pt}</span>
+                                <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
+                              </div>
+                              {evidence && score > 0 && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '4px 8px', borderRadius: '4px', borderLeft: `2px solid ${cc2.text}`, width: '100%' }}>
+                                  {evidence}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Transformation Logic */}
+                      {(lead['Current Process'] || lead['After Chatbot']) && (
+                        <div className="pi-lead-transformation" style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(212,175,55,0.05)', borderRadius: '8px', border: '1px solid rgba(212,175,55,0.1)' }}>
+                          <div style={{ display: 'flex', gap: '10px' }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>Current Process</div>
+                              <div style={{ fontSize: '0.78rem', color: '#ff6b6b' }}>{lead['Current Process'] || 'Manual & inefficient workflows.'}</div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', color: 'var(--gold-primary)' }}><ChevronRight size={16} /></div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--gold-primary)', marginBottom: '4px', fontWeight: 700 }}>After Chatbot</div>
+                              <div style={{ fontSize: '0.78rem', color: '#39ff14' }}>{lead['After Chatbot'] || 'AI-optimized automation.'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {filteredScored.length === 0 && (
+                  <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    No leads above {confThreshold}% confidence.
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -1067,11 +1173,11 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
       {/* EMPTY STATE */}
       {!data && !loading && (
-        <div className="pi-empty-state">
-          <Zap size={48} style={{ color: 'var(--gold-primary)', opacity: 0.3, marginBottom: '1rem' }} />
-          <h4 style={{ color: 'var(--text-main)', fontSize: '1rem', marginBottom: '0.25rem' }}>Enter a technology above</h4>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', maxWidth: '360px' }}>
-            e.g. "chatbots", "voice agents", "website development", "online booking systems". AI will generate pain points, signals, and lead sources automatically.
+        <div className="pi-empty-state" style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.6 }}>
+          <Zap size={48} style={{ color: 'var(--gold-primary)', marginBottom: '1rem', opacity: 0.3 }} />
+          <h4 style={{ color: 'var(--text-main)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>Enter a technology or keyword above</h4>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '400px', margin: '0 auto' }}>
+            AI will generate a custom signal detection plan, identify lead sources, and scan for pain points automatically.
           </p>
         </div>
       )}

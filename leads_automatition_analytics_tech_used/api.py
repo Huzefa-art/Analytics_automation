@@ -598,6 +598,101 @@ async def send_outreach_email(request: EmailSendRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send email via SMTP: {str(e)}")
 
+# ─── Signal Detection Runner Endpoints ────────────────────────────────────────
+
+class SignalRunnerRequest(BaseModel):
+    source: str # 'existing' or 'fresh'
+    industry: str
+    location: str
+    num_businesses: int = 20
+    sources: List[str] = ["Google Maps"]
+    signal_plan: List[dict] = []
+
+@app.post("/prospect-intel/run-signals")
+async def run_signal_detection_flow(request: SignalRunnerRequest, background_tasks: BackgroundTasks):
+    """Orchestrates the Signal Detection Runner pipeline."""
+    if status["scraping"]["active"] or status["analyzing"]["active"]:
+        raise HTTPException(status_code=400, detail="Another process is already in progress.")
+    
+    background_tasks.add_task(execute_signal_runner_task, request)
+    return {"message": "Signal Detection Runner started."}
+
+async def execute_signal_runner_task(request: SignalRunnerRequest):
+    from signal_runner import SignalRunner
+    
+    def log_cb(msg):
+        status["analyzing"]["progress"] = msg
+        status["analyzing"]["logs"].append(msg)
+
+    status["analyzing"]["active"] = True
+    status["analyzing"]["progress"] = "Initializing Signal Runner..."
+    status["analyzing"]["logs"] = ["Initializing Signal Runner..."]
+    
+    runner = SignalRunner(log_callback=log_cb)
+    
+    try:
+        leads_to_process = []
+        
+        # Step 1: Data Collection
+        if request.source == "fresh":
+            log_cb(f"Step 1: Scraping fresh leads from {', '.join(request.sources)}...")
+            scraped = await runner.scrape_multi_source(
+                industry=request.industry,
+                location=request.location,
+                max_results=request.num_businesses,
+                sources=request.sources
+            )
+            for l in scraped:
+                # Save to DB first
+                db_manager.insert_lead(l)
+            leads_to_process = scraped
+        else:
+            log_cb("Step 1: Fetching existing leads from database...")
+            # Fetch leads matching industry
+            all_leads = db_manager.get_all_leads()
+            # Filter by industry (basic match)
+            leads_to_process = [l for l in all_leads if request.industry.lower() in str(l.get("Industry", "")).lower()][:request.num_businesses]
+            if not leads_to_process:
+                leads_to_process = all_leads[:request.num_businesses]
+
+        if not leads_to_process:
+            log_cb("No leads found to process.")
+            return
+
+        # Step 2: Signal Detection & Email Hunting
+        processed_count = 0
+        total = len(leads_to_process)
+        
+        for i, lead in enumerate(leads_to_process, 1):
+            biz_name = lead.get("Business Name", "Unknown")
+            website = lead.get("Website")
+            
+            log_cb(f"[{i}/{total}] Analyzing {biz_name}...")
+            
+            # Deep email hunt if missing
+            current_email = lead.get("Email")
+            if not current_email or current_email == "N/A":
+                email = await runner.hunt_emails(website)
+                lead["Email"] = email
+            
+            # Run detection
+            if request.signal_plan:
+                update_data = await runner.run_detection(lead, request.signal_plan)
+                # Combine results
+                lead.update(update_data)
+                
+            # Update database
+            db_manager.update_lead_analysis(website, lead)
+            processed_count += 1
+            
+        log_cb(f"Runner complete. Processed {processed_count} leads successfully.")
+
+    except Exception as e:
+        log_cb(f"Runner error: {str(e)}")
+    finally:
+        status["analyzing"]["active"] = False
+        status["analyzing"]["last_run"] = pd.Timestamp.now().isoformat()
+
 # ─── Signal Detection Plan Endpoint ────────────────────────────────────────────
 
 class SignalPlanRequest(BaseModel):

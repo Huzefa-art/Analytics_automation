@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS leads (
     phone TEXT DEFAULT 'N/A',
     facebook_page TEXT DEFAULT 'N/A',
     email TEXT DEFAULT 'N/A',
+    rating TEXT DEFAULT '0',
+    reviews TEXT DEFAULT '0',
     ads_active TEXT DEFAULT 'N/A',
     ad_count TEXT DEFAULT '—',
     oldest_ad_date TEXT DEFAULT '—',
@@ -50,6 +52,9 @@ CREATE TABLE IF NOT EXISTS leads (
     advertising TEXT DEFAULT 'N/A',
     hosting TEXT DEFAULT 'N/A',
     js_frameworks TEXT DEFAULT 'N/A',
+    signal_evidence JSONB DEFAULT '{}',
+    current_process TEXT DEFAULT '',
+    after_chatbot TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(business_name, website)
@@ -83,12 +88,16 @@ CSV_TO_DB_MAP = {
     "Analysis Status": "analysis_status", "Website": "website",
     "City": "city", "Country": "country", "Address": "address",
     "Phone": "phone", "Facebook Page": "facebook_page", "Email": "email",
+    "Rating": "rating", "Reviews": "reviews",
     "Ads Active": "ads_active", "Ad Count": "ad_count",
     "Oldest Ad Date": "oldest_ad_date", "CMS": "cms",
     "CRM / Marketing Automation": "crm", "Analytics": "analytics",
     "Live Chat / Support": "live_chat", "Payments": "payments",
     "Advertising / Pixels": "advertising", "Hosting / CDN": "hosting",
-    "JavaScript Frameworks": "js_frameworks"
+    "JavaScript Frameworks": "js_frameworks",
+    "Signal Evidence": "signal_evidence",
+    "Current Process": "current_process",
+    "After Chatbot": "after_chatbot"
 }
 DB_TO_CSV_MAP = {v: k for k, v in CSV_TO_DB_MAP.items()}
 
@@ -105,6 +114,32 @@ def init_db():
     except Exception as e:
         conn.rollback()
         raise RuntimeError(f"Failed to initialize PostgreSQL schema: {e}")
+    finally:
+        conn.close()
+    migrate_db()
+
+def migrate_db():
+    """Add columns if they are missing in existing tables."""
+    conn = get_pg_conn()
+    try:
+        cur = conn.cursor()
+        # Columns to add to 'leads' table
+        new_cols = [
+            ("rating", "TEXT DEFAULT '0'"),
+            ("reviews", "TEXT DEFAULT '0'"),
+            ("signal_evidence", "JSONB DEFAULT '{}'"),
+            ("current_process", "TEXT DEFAULT ''"),
+            ("after_chatbot", "TEXT DEFAULT ''")
+        ]
+        for col_name, col_type in new_cols:
+            try:
+                cur.execute(f"ALTER TABLE leads ADD COLUMN {col_name} {col_type}")
+                print(f"Added column {col_name} to leads.")
+            except Exception:
+                conn.rollback() # column likely already exists
+        conn.commit()
+    except Exception as e:
+        print(f"Migration error: {e}")
     finally:
         conn.close()
 
@@ -295,8 +330,14 @@ def get_pending_leads(limit=10):
 def insert_lead(lead_dict):
     sql_data = {}
     for csv_key, db_col in CSV_TO_DB_MAP.items():
-        default_val = "Pending" if db_col == "analysis_status" else "N/A"
-        sql_data[db_col] = str(lead_dict.get(csv_key, lead_dict.get(db_col, default_val)))
+        val = lead_dict.get(csv_key, lead_dict.get(db_col))
+        if db_col == "signal_evidence" and isinstance(val, (dict, list)):
+            sql_data[db_col] = _json.dumps(val)
+        elif val is None:
+            sql_data[db_col] = "Pending" if db_col == "analysis_status" else "N/A"
+        else:
+            sql_data[db_col] = str(val)
+            
     cols = list(sql_data.keys())
     vals = [sql_data[c] for c in cols]
     ph = ", ".join(["%s"] * len(cols))
@@ -311,22 +352,52 @@ def insert_lead(lead_dict):
         conn.commit()
         return True
     except Exception as e:
+        print(f"insert_lead error: {e}")
         conn.rollback()
         return False
     finally:
         conn.close()
 
 def update_lead_analysis(website, analysis_dict):
+    """Update lead with tech stack, email, ads, and signal runner results."""
     conn = get_pg_conn()
     try:
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE leads SET analysis_status='Analyzed', updated_at=NOW() WHERE website=%s",
-            (website,)
-        )
-        conn.commit()
-        return True
-    except Exception:
+        
+        # Prepare fields for update
+        updates = []
+        params = []
+        
+        for k, v in analysis_dict.items():
+            db_col = CSV_TO_DB_MAP.get(k, k)
+            if db_col in ["signal_evidence"] and isinstance(v, (dict, list, str)):
+                # Ensure it's valid JSON
+                if isinstance(v, str):
+                    try:
+                        _json.loads(v)
+                        updates.append(f"{db_col} = %s::jsonb")
+                        params.append(v)
+                    except: pass 
+                else:
+                    updates.append(f"{db_col} = %s::jsonb")
+                    params.append(_json.dumps(v))
+            else:
+                updates.append(f"{db_col} = %s")
+                params.append(str(v))
+        
+        if updates:
+            updates.append("analysis_status = %s")
+            params.append("Analyzed")
+            updates.append("updated_at = NOW()")
+            
+            query = f"UPDATE leads SET {', '.join(updates)} WHERE website = %s"
+            params.append(website)
+            
+            cur.execute(query, params)
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"update_lead_analysis error: {e}")
         conn.rollback()
         return False
     finally:
