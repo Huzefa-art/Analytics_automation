@@ -1697,6 +1697,123 @@ ranking should list markets from best to worst opportunity."""
     }
 
 
+# ─── Department Recommendations ───────────────────────────────────────────────
+
+DEFAULT_DEPARTMENTS = [
+    { "slug": 'logistics_supply_chain', "label": 'Core Logistics & Supply Chain',  "sub": 'Logistics Managers, Supply Chain Directors',  "color": '#60a5fa' },
+    { "slug": 'warehousing_inventory',  "label": 'Warehousing & Inventory',        "sub": 'Warehouse Managers, Inventory Controllers',    "color": '#fbbf24' },
+    { "slug": 'transport_dispatch',     "label": 'Transport & Dispatch',            "sub": 'Fleet Managers, Dispatchers',                  "color": '#34d399' },
+    { "slug": 'procurement_sourcing',   "label": 'Procurement & Sourcing',          "sub": 'Procurement Managers, Sourcing Analysts',      "color": '#a78bfa' },
+    { "slug": 'cross_functional',       "label": 'Cross-Functional Support',        "sub": 'IT, Finance, HR, Operations',                  "color": '#f87171' },
+    { "slug": 'external_stakeholders',  "label": 'External Stakeholders',           "sub": 'Customers, Vendors, Carriers, Partners',       "color": '#fb923c' },
+]
+
+INDUSTRY_DEPARTMENTS_MAP = {
+    "restaurants": [
+        { "slug": "front_of_house", "label": "Front of House", "sub": "Servers, Hosts, Bartenders", "color": "#60a5fa" },
+        { "slug": "back_of_house", "label": "Back of House / Kitchen", "sub": "Chefs, Cooks, Dishwashers", "color": "#f87171" },
+        { "slug": "management", "label": "Management / Operations", "sub": "General Managers, Owners", "color": "#fbbf24" },
+        { "slug": "delivery_takeout", "label": "Delivery & Takeout", "sub": "Drivers, Dispatchers", "color": "#34d399" },
+        { "slug": "marketing_loyalty", "label": "Marketing & Loyalty", "sub": "Marketing Managers, CRM Admins", "color": "#a78bfa" },
+        { "slug": "supply_vendors", "label": "Supplies & Vendors", "sub": "Purchasing Managers, Sourcing", "color": "#fb923c" },
+    ],
+    "saas": [
+        { "slug": "product_engineering", "label": "Product & Engineering", "sub": "CTO, Product Managers, Engineers", "color": "#60a5fa" },
+        { "slug": "sales_revenue", "label": "Sales & Revenue", "sub": "VP Sales, AEs, SDRs", "color": "#34d399" },
+        { "slug": "marketing_growth", "label": "Marketing & Growth", "sub": "CMO, Growth Hackers, Content Team", "color": "#a78bfa" },
+        { "slug": "customer_success", "label": "Customer Success", "sub": "CSMs, Support Leads", "color": "#fbbf24" },
+        { "slug": "ops_finance", "label": "Ops & Finance", "sub": "COO, Finance, RevOps", "color": "#f87171" },
+        { "slug": "security_compliance", "label": "Security & Compliance", "sub": "CISO, Compliance Officers", "color": "#fb923c" },
+    ],
+    "real estate": [
+        { "slug": "agents_brokers", "label": "Agents & Brokers", "sub": "Realtors, Team Leads, Brokers", "color": "#60a5fa" },
+        { "slug": "property_management", "label": "Property Management", "sub": "Property Managers, Leasing Agents", "color": "#34d399" },
+        { "slug": "admin_ops", "label": "Admin & Operations", "sub": "Office Managers, TCs", "color": "#fbbf24" },
+        { "slug": "marketing_leads", "label": "Marketing & Lead Gen", "sub": "Digital Marketers, CRM Admins", "color": "#a78bfa" },
+        { "slug": "maintenance_vendors", "label": "Maintenance & Vendors", "sub": "Maintenance Techs, Contractors", "color": "#f87171" },
+        { "slug": "investment_finance", "label": "Investment & Finance", "sub": "Analysts, Loan Officers", "color": "#fb923c" },
+    ],
+    "ecommerce": [
+        { "slug": "fulfillment_ops", "label": "Fulfillment & Ops", "sub": "Warehouse, Logistics, Shipping", "color": "#60a5fa" },
+        { "slug": "marketing_social", "label": "Marketing & Social", "sub": "Social Media, Ads, Creators", "color": "#a78bfa" },
+        { "slug": "product_inventory", "label": "Product & Inventory", "sub": "Buyers, Merchandisers", "color": "#34d399" },
+        { "slug": "customer_experience", "label": "Customer Experience", "sub": "Support, Success Agents", "color": "#fbbf24" },
+        { "slug": "finance_legal", "label": "Finance & Legal", "sub": "Accounting, Compliance", "color": "#f87171" },
+        { "slug": "tech_dev", "label": "Tech & Web Dev", "sub": "Developers, UX Designers", "color": "#fb923c" },
+    ]
+}
+
+@router.get("/recommend-departments")
+async def recommend_departments(industry: str = ""):
+    """Recommend 6 logical departments for a given industry."""
+    if not industry.strip():
+        return DEFAULT_DEPARTMENTS
+
+    key = industry.lower().strip()
+    # 1. Check exact match
+    if key in INDUSTRY_DEPARTMENTS_MAP:
+        return INDUSTRY_DEPARTMENTS_MAP[key]
+
+    # 2. Check fuzzy match
+    for k, depts in INDUSTRY_DEPARTMENTS_MAP.items():
+        if k in key or key in k:
+            return depts
+
+    # 3. AI Generation fallback
+    prompt = f"""You are a B2B sales strategist. Provide 6 logical "Department / Stakeholder Focus" groups for businesses in the {industry} industry.
+Each group should include a slug (snake_case), a name (label), and a 3-5 word subtitle (sub) listing typical job titles.
+Assign one of these hex colors to each (distribute them): #60a5fa, #fbbf24, #34d399, #a78bfa, #f87171, #fb923c.
+
+Respond ONLY with a valid JSON array like:
+[
+  {{"slug": "...", "label": "...", "sub": "...", "color": "..."}},
+  ...
+]"""
+    try:
+        raw = nvidia_chat(prompt, max_tokens=1000)
+        # Robust JSON extraction
+        match = _re.search(r'\[[\s\S]*\]', raw)
+        if match:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, list) and len(parsed) >= 3:
+                return parsed[:6]
+    except:
+        pass
+
+    return DEFAULT_DEPARTMENTS
+
+
+def resolve_department_labels(industry: str, slugs: list) -> list:
+    """Resolve a list of slugs into full descriptive labels for the prompt."""
+    if not slugs:
+        return []
+
+    # Get the depts for this industry (cached or generated)
+    # For now, we'll just check the maps and fallback to default
+    all_possible = []
+    key = industry.lower().strip()
+    if key in INDUSTRY_DEPARTMENTS_MAP:
+        all_possible = INDUSTRY_DEPARTMENTS_MAP[key]
+    else:
+        for k, depts in INDUSTRY_DEPARTMENTS_MAP.items():
+            if k in key or key in k:
+                all_possible = depts
+                break
+
+    if not all_possible:
+        all_possible = DEFAULT_DEPARTMENTS
+
+    # Map slug -> full label (Label + Sub)
+    res = []
+    for s in slugs:
+        match = next((d for d in all_possible if d["slug"] == s), None)
+        if match:
+            res.append(f"{match['label']} ({match['sub']})")
+        else:
+            res.append(s) # fallback to slug if not found
+    return res
+
+
 @router.post("/compare")
 async def compare_markets(req: CompareRequest):
     """Compare 2-4 already-researched markets using saved data only."""

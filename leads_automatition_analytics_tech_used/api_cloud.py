@@ -342,25 +342,15 @@ class ProspectIntelRequest(BaseModel):
     departments: Optional[list] = []
 
 
-DEPARTMENT_MAP = {
-    "logistics_supply_chain":   "Core Logistics & Supply Chain (Logistics Managers, Supply Chain Directors)",
-    "warehousing_inventory":    "Warehousing & Inventory (Warehouse Managers, Inventory Controllers)",
-    "transport_dispatch":       "Transport & Dispatch (Fleet Managers, Dispatchers)",
-    "procurement_sourcing":     "Procurement & Sourcing (Procurement Managers, Sourcing Analysts)",
-    "cross_functional":         "Cross-Functional Support (IT, Finance, HR, Operations)",
-    "external_stakeholders":    "External Stakeholders (Customers, Vendors, Carriers, Partners)",
-}
-
-
 def make_prospect_intel_prompt(technology: str, industry: str, departments: list = None) -> str:
+    from market_research import resolve_department_labels, DEFAULT_DEPARTMENTS
     industry_scope = f"the {industry} industry" if industry else "all industries"
 
     if departments and "all" not in departments:
-        dept_labels = [DEPARTMENT_MAP.get(d, d) for d in departments if d in DEPARTMENT_MAP]
+        dept_labels = resolve_department_labels(industry, departments)
         dept_context = "Focus ONLY on these departments:\n" + "\n".join(f"- {d}" for d in dept_labels)
     else:
-        dept_labels = list(DEPARTMENT_MAP.values())
-        dept_context = "Cover ALL departments:\n" + "\n".join(f"- {d}" for d in dept_labels)
+        dept_context = "Cover ALL relevant departments for this industry (including Front/Back of house, Ops, Management, etc. as appropriate)."
 
     return f"""You are a senior B2B sales strategist and market intelligence analyst.
 

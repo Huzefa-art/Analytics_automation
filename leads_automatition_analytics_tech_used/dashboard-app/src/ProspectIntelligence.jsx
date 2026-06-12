@@ -10,21 +10,21 @@ import {
 const API = '/api';
 
 // ── Department options ────────────────────────────────────────────────────────
-const DEPT_OPTIONS = [
-  { slug: 'logistics_supply_chain', label: 'Core Logistics & Supply Chain',  sub: 'Logistics Managers, Supply Chain Directors',  color: '#60a5fa' },
-  { slug: 'warehousing_inventory',  label: 'Warehousing & Inventory',        sub: 'Warehouse Managers, Inventory Controllers',    color: '#fbbf24' },
-  { slug: 'transport_dispatch',     label: 'Transport & Dispatch',            sub: 'Fleet Managers, Dispatchers',                  color: '#34d399' },
-  { slug: 'procurement_sourcing',   label: 'Procurement & Sourcing',          sub: 'Procurement Managers, Sourcing Analysts',      color: '#a78bfa' },
-  { slug: 'cross_functional',       label: 'Cross-Functional Support',        sub: 'IT, Finance, HR, Operations',                  color: '#f87171' },
-  { slug: 'external_stakeholders',  label: 'External Stakeholders',           sub: 'Customers, Vendors, Carriers, Partners',       color: '#fb923c' },
+const DEFAULT_DEPT_OPTIONS = [
+  { slug: 'logistics_supply_chain', label: 'Core Logistics & Supply Chain', sub: 'Logistics Managers, Supply Chain Directors', color: '#60a5fa' },
+  { slug: 'warehousing_inventory', label: 'Warehousing & Inventory', sub: 'Warehouse Managers, Inventory Controllers', color: '#fbbf24' },
+  { slug: 'transport_dispatch', label: 'Transport & Dispatch', sub: 'Fleet Managers, Dispatchers', color: '#34d399' },
+  { slug: 'procurement_sourcing', label: 'Procurement & Sourcing', sub: 'Procurement Managers, Sourcing Analysts', color: '#a78bfa' },
+  { slug: 'cross_functional', label: 'Cross-Functional Support', sub: 'IT, Finance, HR, Operations', color: '#f87171' },
+  { slug: 'external_stakeholders', label: 'External Stakeholders', sub: 'Customers, Vendors, Carriers, Partners', color: '#fb923c' },
 ];
 
-function deptColor(slug) {
-  return DEPT_OPTIONS.find(d => d.slug === slug)?.color || '#888';
+function deptColor(slug, options = DEFAULT_DEPT_OPTIONS) {
+  return options.find(d => d.slug === slug)?.color || '#888';
 }
 
-function DeptBadge({ dept, size = 'sm' }) {
-  const d = DEPT_OPTIONS.find(o => o.slug === dept || o.label === dept);
+function DeptBadge({ dept, options = DEFAULT_DEPT_OPTIONS, size = 'sm' }) {
+  const d = options.find(o => o.slug === dept || o.label === dept);
   const color = d?.color || '#888';
   const label = d?.label || dept;
   return (
@@ -59,9 +59,9 @@ function ConfBadge({ score }) {
 function StatusBadge({ status }) {
   const map = {
     generated: { bg: 'rgba(40,167,69,0.15)', color: '#39ff14', border: 'rgba(40,167,69,0.3)', label: '✓ Generated' },
-    pending:   { bg: 'rgba(255,193,7,0.15)', color: '#ffdf00', border: 'rgba(255,193,7,0.3)',  label: '⟳ Pending' },
-    loading:   { bg: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: 'rgba(96,165,250,0.3)', label: '◌ Loading…' },
-    none:      { bg: 'rgba(120,120,120,0.1)', color: '#666',    border: 'rgba(120,120,120,0.2)', label: '— Not started' },
+    pending: { bg: 'rgba(255,193,7,0.15)', color: '#ffdf00', border: 'rgba(255,193,7,0.3)', label: '⟳ Pending' },
+    loading: { bg: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: 'rgba(96,165,250,0.3)', label: '◌ Loading…' },
+    none: { bg: 'rgba(120,120,120,0.1)', color: '#666', border: 'rgba(120,120,120,0.2)', label: '— Not started' },
   };
   const s = map[status] || map.none;
   return (
@@ -74,8 +74,8 @@ function StatusBadge({ status }) {
 function FreqBadge({ freq }) {
   const map = {
     'very common': '#ff6b6b',
-    'common':      '#ffdf00',
-    'occasional':  '#a78bfa',
+    'common': '#ffdf00',
+    'occasional': '#a78bfa',
   };
   const color = map[(freq || '').toLowerCase()] || '#888';
   return (
@@ -122,20 +122,20 @@ function scoreLeadAgainstSignals(lead, signalBlocks) {
       const side = sig.side;
 
       if (side === 'solution_gap') {
-        const chat  = lead['Live Chat / Support'] || lead['live_chat'] || '';
-        const crm   = lead['CRM / Marketing Automation'] || lead['crm'] || '';
-        const pay   = lead['Payments'] || lead['payments'] || '';
-        const ads   = lead['Ads Active'] || lead['ads_active'] || '';
-        const cms   = lead['CMS'] || lead['cms'] || '';
-        const web   = lead['Website'] || lead['website'] || '';
+        const chat = lead['Live Chat / Support'] || lead['live_chat'] || '';
+        const crm = lead['CRM / Marketing Automation'] || lead['crm'] || '';
+        const pay = lead['Payments'] || lead['payments'] || '';
+        const ads = lead['Ads Active'] || lead['ads_active'] || '';
+        const cms = lead['CMS'] || lead['cms'] || '';
+        const web = lead['Website'] || lead['website'] || '';
         const noVal = v => !v || v === 'N/A' || v === '[]' || v === '';
 
-        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot'))  ok = noVal(chat);
-        else if (st.includes('crm') || st.includes('automat'))                     ok = noVal(crm);
+        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot')) ok = noVal(chat);
+        else if (st.includes('crm') || st.includes('automat')) ok = noVal(crm);
         else if (st.includes('payment') || st.includes('order') || st.includes('booking')) ok = noVal(pay);
-        else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel'))    ok = ads === 'No' || noVal(ads);
-        else if (st.includes('website') || st.includes('web presence'))            ok = noVal(web);
-        else if (st.includes('analytics'))                                          ok = noVal(cms) && noVal(chat);
+        else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel')) ok = ads === 'No' || noVal(ads);
+        else if (st.includes('website') || st.includes('web presence')) ok = noVal(web);
+        else if (st.includes('analytics')) ok = noVal(cms) && noVal(chat);
         else ok = noVal(cms);
       } else {
         // problem_evidence — proxy: has email/phone as reachable contact
@@ -161,7 +161,9 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   // Inputs
   const [technology, setTechnology] = useState('');
   const [industry, setIndustry] = useState('');
+  const [deptOptions, setDeptOptions] = useState(DEFAULT_DEPT_OPTIONS);
   const [departments, setDepartments] = useState([]); // selected dept slugs
+  const [loadingDepts, setLoadingDepts] = useState(false);
   const [submitted, setSubmitted] = useState(null);
 
   // Generation state
@@ -211,6 +213,26 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 
+  // ── Fetch recommended departments when industry changes ─────────────────
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      setLoadingDepts(true);
+      try {
+        const res = await axios.get(`${API}/market/recommend-departments?industry=${encodeURIComponent(industry)}`);
+        if (res.data && Array.isArray(res.data)) {
+          setDeptOptions(res.data);
+          // Clear selections if they no longer exist in new options
+          setDepartments(prev => prev.filter(slug => res.data.some(opt => opt.slug === slug)));
+        }
+      } catch (err) {
+        console.error("Failed to fetch depts", err);
+      } finally {
+        setLoadingDepts(false);
+      }
+    }, 600); // 600ms debounce
+    return () => clearTimeout(timer);
+  }, [industry]);
+
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
     const onChange = () => { if (mq.matches) setHistoryOpen(false); };
@@ -231,7 +253,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
       // The problem field stores "prospect:{tech}:{industry}"
       const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
       const tech = parts[0] || entry.industry;
-      const ind  = parts[1] || '';
+      const ind = parts[1] || '';
       const sub = { technology: tech, industry: ind };
       setSubmitted(sub);
       setTechnology(tech);
@@ -454,8 +476,8 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {history.map((entry, i) => {
                   const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
-                  const tech  = parts[0] || entry.industry;
-                  const ind   = parts[1] || '';
+                  const tech = parts[0] || entry.industry;
+                  const ind = parts[1] || '';
                   const isActive = submitted?.technology === tech && submitted?.industry === ind;
                   return (
                     <div key={i}
@@ -511,12 +533,13 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
 
           {/* Department / Stakeholder Focus */}
           <div style={{ gridColumn: '1 / -1' }}>
-            <label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               Department / Stakeholder Focus
               <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0, marginLeft: '6px' }}>(optional — select all that apply)</span>
+              {loadingDepts && <Loader size={12} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />}
             </label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
-              {DEPT_OPTIONS.map(opt => {
+              {deptOptions.map(opt => {
                 const selected = departments.includes(opt.slug);
                 return (
                   <button key={opt.slug} type="button"
@@ -609,7 +632,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
           {submitted.departments?.length > 0 && (
             <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
               <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Dept Focus:</span>
-              {submitted.departments.map(slug => <DeptBadge key={slug} dept={slug} size="xs" />)}
+              {submitted.departments.map(slug => <DeptBadge key={slug} dept={slug} options={deptOptions} size="xs" />)}
             </div>
           )}
         </div>
@@ -651,7 +674,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                         {pp.who_feels_pain.map((wfp, wi) => (
                           <div key={wi} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                            <DeptBadge dept={wfp.department} size="xs" />
+                            <DeptBadge dept={wfp.department} options={deptOptions} size="xs" />
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                               {Array.isArray(wfp.job_titles) ? wfp.job_titles.join(', ') : wfp.job_titles}
                             </span>
@@ -801,7 +824,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                         <div style={{ flex: 1 }}>
                           <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>{src.decision_maker.job_title}</span>
                           {src.decision_maker.department && (
-                            <DeptBadge dept={src.decision_maker.department} size="xs" />
+                            <DeptBadge dept={src.decision_maker.department} options={deptOptions} size="xs" />
                           )}
                           {src.decision_maker.why && (
                             <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{src.decision_maker.why}</p>
@@ -867,139 +890,139 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
                 </div>
               ) : (
                 <>
-                <div className="pi-table-scroll">
-                  <table className="pi-results-table">
-                    <thead>
-                      <tr>
-                        <th style={thStyle}><input type="checkbox" onChange={e => {
-                          if (e.target.checked) setSelectedLeads(new Set(filteredScored.map((_, i) => i)));
-                          else setSelectedLeads(new Set());
-                        }} /></th>
-                        <th style={thStyle}>Business</th>
-                        <th style={thStyle}>Industry</th>
-                        <th style={thStyle}>Contact</th>
-                        <th style={thStyle}>Overall</th>
-                        {painTitles.map((pt, i) => <th key={i} style={{ ...thStyle, maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pt}>{pt.length > 18 ? pt.slice(0, 16) + '…' : pt}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredScored.map((lead, idx) => {
-                        const name = lead['Business Name'] || lead['business_name'] || '—';
-                        const industry = lead['Industry'] || lead['industry'] || '—';
-                        const email = lead['Email'] || lead['email'] || '';
-                        const phone = lead['Phone'] || lead['phone'] || '';
-                        const website = lead['Website'] || lead['website'] || '';
-                        const cc = getConfColor(lead._overall);
-                        const isSelected = selectedLeads.has(idx);
-                        return (
-                          <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent' }}>
-                            <td style={tdStyle}>
+                  <div className="pi-table-scroll">
+                    <table className="pi-results-table">
+                      <thead>
+                        <tr>
+                          <th style={thStyle}><input type="checkbox" onChange={e => {
+                            if (e.target.checked) setSelectedLeads(new Set(filteredScored.map((_, i) => i)));
+                            else setSelectedLeads(new Set());
+                          }} /></th>
+                          <th style={thStyle}>Business</th>
+                          <th style={thStyle}>Industry</th>
+                          <th style={thStyle}>Contact</th>
+                          <th style={thStyle}>Overall</th>
+                          {painTitles.map((pt, i) => <th key={i} style={{ ...thStyle, maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={pt}>{pt.length > 18 ? pt.slice(0, 16) + '…' : pt}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredScored.map((lead, idx) => {
+                          const name = lead['Business Name'] || lead['business_name'] || '—';
+                          const industry = lead['Industry'] || lead['industry'] || '—';
+                          const email = lead['Email'] || lead['email'] || '';
+                          const phone = lead['Phone'] || lead['phone'] || '';
+                          const website = lead['Website'] || lead['website'] || '';
+                          const cc = getConfColor(lead._overall);
+                          const isSelected = selectedLeads.has(idx);
+                          return (
+                            <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent' }}>
+                              <td style={tdStyle}>
+                                <input type="checkbox" checked={isSelected} onChange={e => {
+                                  const ns = new Set(selectedLeads);
+                                  e.target.checked ? ns.add(idx) : ns.delete(idx);
+                                  setSelectedLeads(ns);
+                                }} />
+                              </td>
+                              <td style={tdStyle}>
+                                <div style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem' }}>{name}</div>
+                                {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
+                                  <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 30)}
+                                </a>}
+                              </td>
+                              <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>{industry}</td>
+                              <td style={tdStyle}>
+                                {email && email !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#60a5fa' }}>✉ {email}</div>}
+                                {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#a78bfa' }}>☎ {phone}</div>}
+                              </td>
+                              <td style={tdStyle}><ConfBadge score={lead._overall} /></td>
+                              {painTitles.map((pt, pi) => {
+                                const ppData = lead._perPainPoint?.[pt];
+                                const score = ppData?.score || 0;
+                                const cc2 = getConfColor(score);
+                                return (
+                                  <td key={pi} style={tdStyle}>
+                                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: cc2.text }}>{score}%</div>
+                                    <div style={{ display: 'flex', gap: '2px', marginTop: '2px', flexWrap: 'wrap' }}>
+                                      {ppData?.confirmed?.map((s, si) => (
+                                        <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#39ff14', display: 'inline-block' }} />
+                                      ))}
+                                      {ppData?.unconfirmed?.map((s, si) => (
+                                        <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block' }} />
+                                      ))}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {filteredScored.length === 0 && (
+                      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No leads above {confThreshold}% confidence. Lower the slider or run a new scrape.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pi-mobile-leads">
+                    {filteredScored.map((lead, idx) => {
+                      const name = lead['Business Name'] || lead['business_name'] || '—';
+                      const industry = lead['Industry'] || lead['industry'] || '—';
+                      const email = lead['Email'] || lead['email'] || '';
+                      const phone = lead['Phone'] || lead['phone'] || '';
+                      const website = lead['Website'] || lead['website'] || '';
+                      const isSelected = selectedLeads.has(idx);
+                      return (
+                        <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
+                          <div className="pi-lead-card-top">
+                            <label className="pi-lead-check">
                               <input type="checkbox" checked={isSelected} onChange={e => {
                                 const ns = new Set(selectedLeads);
                                 e.target.checked ? ns.add(idx) : ns.delete(idx);
                                 setSelectedLeads(ns);
                               }} />
-                            </td>
-                            <td style={tdStyle}>
-                              <div style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem' }}>{name}</div>
-                              {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
-                                <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 30)}
-                              </a>}
-                            </td>
-                            <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>{industry}</td>
-                            <td style={tdStyle}>
-                              {email && email !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#60a5fa' }}>✉ {email}</div>}
-                              {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: '#a78bfa' }}>☎ {phone}</div>}
-                            </td>
-                            <td style={tdStyle}><ConfBadge score={lead._overall} /></td>
-                            {painTitles.map((pt, pi) => {
-                              const ppData = lead._perPainPoint?.[pt];
-                              const score = ppData?.score || 0;
-                              const cc2 = getConfColor(score);
-                              return (
-                                <td key={pi} style={tdStyle}>
-                                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: cc2.text }}>{score}%</div>
-                                  <div style={{ display: 'flex', gap: '2px', marginTop: '2px', flexWrap: 'wrap' }}>
-                                    {ppData?.confirmed?.map((s, si) => (
-                                      <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#39ff14', display: 'inline-block' }} />
-                                    ))}
-                                    {ppData?.unconfirmed?.map((s, si) => (
-                                      <span key={si} title={s.signal} style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block' }} />
-                                    ))}
+                            </label>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="pi-lead-name">{name}</div>
+                              <div className="pi-lead-meta">{industry}</div>
+                            </div>
+                            <ConfBadge score={lead._overall} />
+                          </div>
+                          {(email || phone) && (
+                            <div className="pi-lead-contact">
+                              {email && email !== 'N/A' && <span>✉ {email}</span>}
+                              {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
+                            </div>
+                          )}
+                          {website && website !== 'N/A' && (
+                            <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
+                              <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
+                            </a>
+                          )}
+                          {painTitles.length > 0 && (
+                            <div className="pi-lead-scores">
+                              {painTitles.map((pt, pi) => {
+                                const score = lead._perPainPoint?.[pt]?.score || 0;
+                                const cc2 = getConfColor(score);
+                                return (
+                                  <div key={pi} className="pi-lead-score-row">
+                                    <span className="pi-lead-score-label" title={pt}>{pt}</span>
+                                    <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
                                   </div>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {filteredScored.length === 0 && (
-                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                      No leads above {confThreshold}% confidence. Lower the slider or run a new scrape.
-                    </div>
-                  )}
-                </div>
-
-                <div className="pi-mobile-leads">
-                  {filteredScored.map((lead, idx) => {
-                    const name = lead['Business Name'] || lead['business_name'] || '—';
-                    const industry = lead['Industry'] || lead['industry'] || '—';
-                    const email = lead['Email'] || lead['email'] || '';
-                    const phone = lead['Phone'] || lead['phone'] || '';
-                    const website = lead['Website'] || lead['website'] || '';
-                    const isSelected = selectedLeads.has(idx);
-                    return (
-                      <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
-                        <div className="pi-lead-card-top">
-                          <label className="pi-lead-check">
-                            <input type="checkbox" checked={isSelected} onChange={e => {
-                              const ns = new Set(selectedLeads);
-                              e.target.checked ? ns.add(idx) : ns.delete(idx);
-                              setSelectedLeads(ns);
-                            }} />
-                          </label>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div className="pi-lead-name">{name}</div>
-                            <div className="pi-lead-meta">{industry}</div>
-                          </div>
-                          <ConfBadge score={lead._overall} />
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                        {(email || phone) && (
-                          <div className="pi-lead-contact">
-                            {email && email !== 'N/A' && <span>✉ {email}</span>}
-                            {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
-                          </div>
-                        )}
-                        {website && website !== 'N/A' && (
-                          <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
-                            <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
-                          </a>
-                        )}
-                        {painTitles.length > 0 && (
-                          <div className="pi-lead-scores">
-                            {painTitles.map((pt, pi) => {
-                              const score = lead._perPainPoint?.[pt]?.score || 0;
-                              const cc2 = getConfColor(score);
-                              return (
-                                <div key={pi} className="pi-lead-score-row">
-                                  <span className="pi-lead-score-label" title={pt}>{pt}</span>
-                                  <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                      );
+                    })}
+                    {filteredScored.length === 0 && (
+                      <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No leads above {confThreshold}% confidence.
                       </div>
-                    );
-                  })}
-                  {filteredScored.length === 0 && (
-                    <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                      No leads above {confThreshold}% confidence.
-                    </div>
-                  )}
-                </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>
