@@ -938,6 +938,25 @@ Respond ONLY with valid JSON. No markdown fences:
 }}"""
 
 
+def _parse_prospect_intel_response(response: str) -> Optional[dict]:
+    import re
+    import json
+    try:
+        clean = response.strip()
+        clean = re.sub(r'^```(?:json)?\s*', '', clean)
+        clean = re.sub(r'\s*```$', '', clean)
+        clean = clean.strip()
+        try:
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            m = re.search(r'\{[\s\S]*\}', clean)
+            if m:
+                return json.loads(m.group())
+    except Exception:
+        pass
+    return None
+
+
 @app.post("/prospect-intel/generate")
 async def generate_prospect_intel(request: ProspectIntelRequest):
     from market_research import nvidia_chat
@@ -955,18 +974,8 @@ async def generate_prospect_intel(request: ProspectIntelRequest):
     prompt = make_prospect_intel_prompt(request.technology, request.industry or "", request.departments or [])
     response = nvidia_chat(prompt, max_tokens=6000)
 
-    result = None
     try:
-        clean = response.strip()
-        clean = re.sub(r'^```(?:json)?\s*', '', clean)
-        clean = re.sub(r'\s*```$', '', clean)
-        clean = clean.strip()
-        try:
-            result = json.loads(clean)
-        except json.JSONDecodeError:
-            m = re.search(r'\{[\s\S]*\}', clean)
-            if m:
-                result = json.loads(m.group())
+        result = _parse_prospect_intel_response(response)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to parse LLM response: {str(e)}")
 
