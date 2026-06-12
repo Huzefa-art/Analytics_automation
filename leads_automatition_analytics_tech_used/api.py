@@ -855,6 +855,7 @@ def _build_industry_source_profile(industry: str) -> dict:
     is_hospitality = any(h in ind for h in hospitality)
     is_b2c = is_hospitality or any(r in ind for r in retail_b2c)
 
+    # Review platforms
     if is_hospitality:
         review_platforms = "Yelp, TripAdvisor, Google Reviews, Trustpilot"
         booking_platforms = "OpenTable, Resy, Zomato (for restaurants); Booking.com, Expedia (for hotels)"
@@ -865,9 +866,9 @@ def _build_industry_source_profile(industry: str) -> dict:
         review_signals = "customer reviews mentioning poor communication, slow response, unprofessional service, missed appointments"
     else:
         # B2B industries (logistics, manufacturing, SaaS, construction, etc.)
-        review_platforms = "Google Reviews (if applicable), Trustpilot, industry-specific review sites"
+        review_platforms = "Trustpilot, G2, Capterra, TrustRadius, Google Reviews (for general visibility)"
         booking_platforms = "NOT APPLICABLE — do not use restaurant/hotel booking platforms"
-        review_signals = "NOT APPLICABLE — do not use consumer review language (wait times, rude staff, bad food). Instead use industry-specific evidence: shipment delays, carrier complaints, invoice errors, compliance gaps, missed SLAs"
+        review_signals = "B2B client feedback on platforms like G2/Trustpilot: implementation delays, carrier visibility gaps, missed SLAs, poor account management, accuracy of documentation"
 
     return {
         "is_b2c": is_b2c,
@@ -926,52 +927,39 @@ RULE 0 — INDUSTRY ISOLATION (MOST IMPORTANT):
 This report is about {industry_scope} ONLY.
 Do NOT import concepts, metrics, platforms, or language from ANY other industry.
 - If the industry is logistics/manufacturing: NEVER mention TripAdvisor, Yelp restaurants, "wait times", "bad food", "rude staff", OpenTable, Resy, Zomato, or any hospitality concept. Use logistics language: shipment delays, carrier communication gaps, tracking visibility, freight costs, SLA breaches, compliance violations.
+- If the industry is logistics: Remove Yelp from ALL signal blocks — replace with Trustpilot, G2, or Capterra for B2B reviews, or Indeed/Glassdoor for internal signals.
+- If the industry is logistics: Remove "Receptionist" and "front_of_house" from contact roles — logistics companies don't have receptionists making software decisions.
 - If the industry is restaurants/hospitality: NEVER mention supply chain, freight, carriers, warehouse ops, or B2B procurement. Use hospitality language: covers, reservations, guest experience, table turns, wait times.
-- If the industry is SaaS/tech: NEVER mention physical operations, walk-ins, or foot traffic. Use SaaS language: churn, MRR, onboarding, support tickets, feature adoption.
 Before EVERY field you output, ask: "Does this concept actually exist in {industry_scope}?" If not, replace it with something that does.
 
 RULE 1 — DIRECT SOLUTION ONLY:
 Every pain point MUST be a problem where "{technology}" is a DIRECT and OBVIOUS solution.
-If a reasonable person would say "that's a stretch" or "{technology} doesn't really fix that," REMOVE the pain point entirely.
-Example of BAD: "Inadequate Staff Training" -> chatbots do NOT train staff. Remove it.
-Example of GOOD: "Missed After-Hours Enquiries" -> chatbots capture 24/7 conversations. Keep it.
+- Example of BAD: "Inadequate Staff Training" -> chatbots do NOT train staff. Remove it.
+- Example of GOOD: "Missed After-Hours Enquiries" -> chatbots capture 24/7 conversations. Keep it.
 
-RULE 2 — DEPARTMENT-CONTACT ACCURACY:
-The "who_feels_pain" job titles and "who_to_contact" job title MUST be people whose ACTUAL day-to-day responsibilities include this problem IN {industry_scope.upper()}.
-Job titles must be real titles that exist in this industry. Examples:
-- Logistics: Supply Chain Manager, Fleet Manager, Logistics Coordinator, Warehouse Manager, Procurement Manager, VP Operations, Carrier Relations Manager, Dispatch Supervisor.
-- Manufacturing: Plant Manager, Production Supervisor, Quality Manager, Maintenance Manager.
-- SaaS: Product Manager, CTO, VP Engineering, Head of Customer Success.
-- Restaurants: General Manager, FOH Manager, Kitchen Manager, Owner/Operator.
+RULE 2 — PUBLIC SIGNALS ONLY (NO PRIVATE TOOLS):
+NEVER suggest internal or private tools as signal sources. An outsider cannot see into another company's systems.
+- BAD SIGNALS: Google Analytics, CRM data, email inbox content, internal ERP reports, private Slack channels.
+- GOOD SIGNALS: Public reviews (G2/Trustpilot), live chat presence on website, job board postings (Indeed/LinkedIn), social media activity, public news reports.
+
+RULE 3 — DEPARTMENT-CONTACT ACCURACY:
+The "who_feels_pain" job titles and "who_to_contact" job title MUST be people whose ACTUAL responsibilities include this problem IN {industry_scope.upper()}.
+Job titles must be real titles that exist in this industry.
 Ask yourself: "Would this person LOSE SLEEP over this problem?" If no, pick someone else.
 
-RULE 3 — DIFFERENT DECISION MAKERS PER SOURCE:
-Each lead source in Section 3 MUST point to a DIFFERENT decision maker job title.
-Do NOT repeat the same title across multiple sources.
-Instead, match decision makers to where they are found:
-- Google Maps -> business Owner or GM (they manage the listing)
-- LinkedIn -> senior director/VP titles (they are active on LinkedIn)
-- Indeed -> the hiring manager for the relevant role
-- Glassdoor -> COO or HR Director (they monitor employer brand)
-- Industry directories -> department-specific managers
-- Trade publications -> thought leaders and VPs
-The decision maker must logically match the source context.
+RULE 4 — DIFFERENT DECISION MAKERS PER SOURCE:
+Each of the 7 lead sources in Section 3 MUST point to a DIFFERENT decision maker job title.
+Do NOT repeat the same title across multiple sources. No repeating "Operations Manager".
 
-RULE 4 — SOURCE-SIGNAL LOGIC:
+RULE 5 — SOURCE-SIGNAL LOGIC:
 Use ONLY platforms where {industry_scope} businesses actually exist.
-Review/evidence platforms:
-  {sp["review_platforms"]}
-  Signals available: {sp["review_signals"]}
-Booking/industry platforms:
-  {sp["booking_platforms"]}
-BuiltWith/Wappalyzer: technology presence/absence — good for ALL pain points.
-Indeed/LinkedIn job posts: hiring signals reveal operational gaps.
-Business website: UX, chat presence, booking/quoting flow — good for ALL pain points.
-NEVER use a platform that doesn't list businesses in {industry_scope}.
+- BuiltWith/Wappalyzer: technology presence/absence — good for ALL pain points.
+- Indeed/LinkedIn job posts: hiring signals reveal operational gaps.
+- Business website: UX, chat presence, booking/quoting flow — good for ALL pain points.
 Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer). Weights sum to 100%.
 
-RULE 5 — PAIN POINT COUNT:
-Generate exactly 4-5 pain points. Quality over quantity. Each must pass Rules 0-4 above.
+RULE 6 — PAIN POINT COUNT:
+Generate exactly 4-5 pain points. Quality over quantity. Each must pass Rules 0-5 above.
 
 ═══ SECTION 1 — PAIN POINTS ═══
 Generate 4-5 pain points that "{technology}" DIRECTLY solves for {industry_scope}.
@@ -1120,6 +1108,12 @@ def _validate_industry_isolation(result: dict, industry: str) -> list:
             if term in raw:
                 violations.append(f"B2B term '{term}' found in {industry} output")
 
+    # Check for forbidden internal signals
+    forbidden_signals = ["google analytics", "crm data", "crm software", "erp reports", "internal dashboard", "hubspot data", "salesforce data"]
+    for term in forbidden_signals:
+        if term in raw:
+            violations.append(f"Forbidden internal system '{term}' suggested as a public signal")
+
     # Check for duplicate decision maker titles in section3
     sources = result.get("section3_lead_sources", [])
     titles = [s.get("decision_maker", {}).get("job_title", "").strip().lower()
@@ -1128,7 +1122,7 @@ def _validate_industry_isolation(result: dict, industry: str) -> list:
         from collections import Counter
         dupes = {t: c for t, c in Counter(titles).items() if c > 1}
         if dupes:
-            violations.append(f"Duplicate decision makers in lead sources: {dupes}")
+            violations.append(f"Duplicate decision makers in lead sources: {list(dupes.keys())}")
 
     return violations
 

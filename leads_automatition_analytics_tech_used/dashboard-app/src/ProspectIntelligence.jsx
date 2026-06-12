@@ -116,32 +116,59 @@ function scoreLeadAgainstSignals(lead, signalBlocks) {
     let blockScore = 0;
 
     for (const sig of (block.signals || [])) {
-      const weight = sig.weight || 0;
+      const weight = sig.weight || 20; // fallback weight
       let ok = false;
       const st = (sig.signal || '').toLowerCase();
+      const st_desc = (sig.confirmed_if || '').toLowerCase();
       const side = sig.side;
 
-      if (side === 'solution_gap') {
-        const chat = lead['Live Chat / Support'] || lead['live_chat'] || '';
-        const crm = lead['CRM / Marketing Automation'] || lead['crm'] || '';
-        const pay = lead['Payments'] || lead['payments'] || '';
-        const ads = lead['Ads Active'] || lead['ads_active'] || '';
-        const cms = lead['CMS'] || lead['cms'] || '';
-        const web = lead['Website'] || lead['website'] || '';
-        const noVal = v => !v || v === 'N/A' || v === '[]' || v === '';
+      // Normalize lead fields
+      const chat = lead['Live Chat / Support'] || lead['live_chat'] || '';
+      const crm = lead['CRM / Marketing Automation'] || lead['crm'] || '';
+      const pay = lead['Payments'] || lead['payments'] || '';
+      const ads = lead['Ads Active'] || lead['ads_active'] || '';
+      const cms = lead['CMS'] || lead['cms'] || '';
+      const web = lead['Website'] || lead['website'] || '';
+      const rating = parseFloat(lead['Rating'] || lead['rating'] || '5');
+      const reviews = parseInt(lead['Reviews'] || lead['reviews'] || '0');
+      const email = lead['Email'] || lead['email'] || '';
+      const phone = lead['Phone'] || lead['phone'] || '';
 
-        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot')) ok = noVal(chat);
-        else if (st.includes('crm') || st.includes('automat')) ok = noVal(crm);
-        else if (st.includes('payment') || st.includes('order') || st.includes('booking')) ok = noVal(pay);
-        else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel')) ok = ads === 'No' || noVal(ads);
-        else if (st.includes('website') || st.includes('web presence')) ok = noVal(web);
-        else if (st.includes('analytics')) ok = noVal(cms) && noVal(chat);
-        else ok = noVal(cms);
+      const noVal = v => !v || v === 'N/A' || v === '[]' || v === '';
+
+      if (side === 'solution_gap') {
+        // Broaden matching for software gaps
+        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot') || st.includes('messaging')) {
+          ok = noVal(chat);
+        } else if (st.includes('crm') || st.includes('automat') || st.includes('outreach') || st.includes('salesforce') || st.includes('hubspot')) {
+          ok = noVal(crm);
+        } else if (st.includes('payment') || st.includes('order') || st.includes('booking') || st.includes('transaction')) {
+          ok = noVal(pay);
+        } else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel') || st.includes('facebook') || st.includes('google ads')) {
+          ok = ads === 'No' || noVal(ads);
+        } else if (st.includes('website') || st.includes('web presence') || st.includes('online visibility')) {
+          ok = noVal(web);
+        } else if (st.includes('analytics') || st.includes('tracking') || st.includes('pixel')) {
+          ok = noVal(cms) && noVal(chat);
+        } else if (st.includes('logisitic') || st.includes('shipment') || st.includes('carrier') || st.includes('freight')) {
+          // B2B logistics specific gaps — often tied to lack of advanced CRM/Pay integration
+          ok = noVal(crm) || noVal(pay);
+        } else {
+          ok = noVal(cms); // Fallback to CMS check
+        }
       } else {
-        // problem_evidence — proxy: has email/phone as reachable contact
-        const email = lead['Email'] || lead['email'] || '';
-        const phone = lead['Phone'] || lead['phone'] || '';
-        ok = (email && email !== 'N/A' && email !== '') || (phone && phone !== 'N/A' && phone !== '');
+        // problem_evidence — check reviews, rating, or reachability
+        const hasContact = (email && email !== 'N/A' && email !== '') || (phone && phone !== 'N/A' && phone !== '');
+
+        if (st.includes('review') || st.includes('rating') || st.includes('reputation') || st.includes('unhappy')) {
+          // Lower ratings or fewer reviews can be evidence of pain
+          ok = rating < 4.2 || reviews < 15;
+        } else if (st.includes('hiring') || st.includes('vacancy') || st.includes('recruiting')) {
+          // hiring signals are strong evidence of growth or turnover pain
+          ok = reviews > 5; // Proxy: established businesses hire more
+        } else {
+          ok = hasContact; // Default to basic reachability
+        }
       }
 
       if (ok) { confirmed.push(sig); blockScore += weight; }
@@ -395,7 +422,7 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
           technology: submitted.technology,
           industry: submitted.industry,
           scored_leads: toSave
-        }).catch(() => {});
+        }).catch(() => { });
       } catch { /* silent — scan still shown even if save fails */ }
     }
   };
