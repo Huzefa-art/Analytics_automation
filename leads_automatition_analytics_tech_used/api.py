@@ -852,6 +852,7 @@ def make_prospect_intel_prompt(technology: str, industry: str, departments: list
 
 
     return f"""You are a senior B2B sales strategist and market intelligence analyst.
+You have deep knowledge of real-world org structures, job responsibilities, and buying authority.
 
 A company sells: {technology}
 Target market: {industry_scope}
@@ -860,16 +861,51 @@ Department focus:
 
 Generate a structured Prospect Intelligence Report with exactly THREE sections.
 
+═══ CRITICAL VALIDATION RULES (APPLY TO EVERY FIELD) ═══
+Before outputting ANY pain point, signal, or lead source, apply these hard rules:
+
+RULE 1 — DIRECT SOLUTION ONLY:
+Every pain point MUST be a problem where "{technology}" is a DIRECT and OBVIOUS solution.
+If a reasonable person would say "that's a stretch" or "{technology} doesn't really fix that," REMOVE the pain point entirely.
+Example of BAD: "Inadequate Staff Training" → chatbots do NOT train staff. Remove it.
+Example of GOOD: "Missed After-Hours Enquiries" → chatbots capture 24/7 conversations. Keep it.
+
+RULE 2 — DEPARTMENT-CONTACT ACCURACY:
+The "who_feels_pain" job titles and "who_to_contact" job title MUST be people whose ACTUAL day-to-day responsibilities include this problem.
+- Supply chain visibility problems → Supply Chain Manager, Logistics Director, Operations Director. NEVER a Receptionist, Server, or Host.
+- Customer wait time / front-of-house issues → FOH Manager, General Manager. NEVER a back-office role.
+- Data/inventory accuracy → Inventory Controller, Warehouse Manager, Ops Manager.
+- Booking/reservation gaps → Reservations Manager, Front Desk Supervisor, GM.
+Ask yourself: "Would this person LOSE SLEEP over this problem?" If no, pick someone else.
+
+RULE 3 — DIFFERENT DECISION MAKERS PER SOURCE:
+Each lead source in Section 3 MUST point to a DIFFERENT decision maker job title.
+Do NOT repeat the same "Operations Manager" across all 6 sources.
+Instead: Google Maps → Owner/GM, LinkedIn → Operations Director, Indeed → HR/People Manager, Glassdoor → COO, Yelp → Customer Experience Manager, etc.
+The decision maker must logically match the source context.
+
+RULE 4 — SOURCE-SIGNAL LOGIC:
+Review platforms (Yelp, Google Reviews, TripAdvisor) reveal CUSTOMER-FACING problems ONLY:
+  - Long wait times, rude staff, bad food, slow service, poor communication.
+  - They NEVER reveal internal back-office issues like data entry errors, supply chain inefficiency, or inventory mismanagement.
+Never use Yelp/Google Reviews as evidence for internal operational problems.
+Use review platforms ONLY for pain points visible to end customers.
+
+RULE 5 — PAIN POINT COUNT:
+Generate exactly 4-5 pain points. Quality over quantity. Each must pass Rules 1-4 above.
+
 ═══ SECTION 1 — PAIN POINTS ═══
-Generate minimum 5 pain points that \"{technology}\" directly solves for {industry_scope}.
+Generate 4-5 pain points that "{technology}" DIRECTLY solves for {industry_scope}.
 For each pain point:
 - title: short compelling name (max 6 words)
 - description: 2-3 sentences explaining the real-world business problem
 - revenue_impact: specific stat e.g. "businesses report 23% reduction in missed bookings after implementing this"
 - frequency: one of "very common" / "common" / "occasional"
 - why_tech_solves: 1 sentence explaining exactly how {technology} fixes this pain
-- who_feels_pain: list of departments and job titles who experience this pain daily. Format: [{{"department": "...", "job_titles": ["...", "..."]}}]
+- who_feels_pain: list of departments and job titles who experience this pain DAILY and would LOSE SLEEP over it.
+  Format: [{{"department": "...", "job_titles": ["...", "..."]}}]
   Only include departments from the department focus above.
+  VALIDATE: does each job title genuinely own this problem? (See Rule 2)
 
 ═══ SECTION 2 — SIGNAL DETECTION PLAN ═══
 For EACH pain point above, generate signals proving a business faces that problem and lacks {technology}.
@@ -877,19 +913,30 @@ SIDE 1 (solution_gap): proof business has NO {technology} installed.
 SIDE 2 (problem_evidence): external proof the pain EXISTS.
 
 For each signal block also include:
-- who_to_contact: the specific department and job title to reach when this signal is confirmed.
+- who_to_contact: the ONE specific person to reach when this signal is confirmed.
+  This person must DIRECTLY OWN the problem domain (see Rule 2).
   Format: {{"department": "...", "job_title": "...", "why": "1 sentence on why this person is the right contact"}}
+  The "why" must reference their specific responsibilities, NOT generic authority.
 
 ALLOWED SOURCES ONLY (no login): Business website, Google Maps, Google Search snippet,
 BuiltWith.com/Wappalyzer, Yelp/TripAdvisor/Trustpilot, OpenTable/Resy/Zomato,
 Indeed/LinkedIn public job search, Google Jobs SERP, Google News, Yellow Pages/Foursquare/Bark.com,
 Glassdoor public, Similarweb public. For Facebook/Instagram: Google Search snippet only.
+
+SOURCE-SIGNAL MATCHING (Rule 4):
+- Review platforms (Yelp, TripAdvisor, Google Reviews): ONLY for customer-visible problems.
+- BuiltWith/Wappalyzer: technology presence/absence — good for ALL pain points.
+- Indeed/LinkedIn job posts: hiring signals reveal operational gaps.
+- Business website: UX, chat presence, booking flow — good for ALL pain points.
 Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer). Weights sum to 100%.
 
 ═══ SECTION 3 — AUDIENCE & LEAD SOURCES ═══
 Generate a lead sourcing plan — 5-7 sources.
 For each source: platform, search_keyword, why, estimated_volume, filter_tip, is_primary, AND:
-- decision_maker: who to email/call. Format: {{"job_title": "...", "department": "...", "why": "...", "how_to_find": "LinkedIn search tip or Google operator"}}
+- decision_maker: who to email/call from THIS SPECIFIC SOURCE.
+  Format: {{"job_title": "...", "department": "...", "why": "...", "how_to_find": "LinkedIn search tip or Google operator"}}
+  CRITICAL: Each source MUST have a DIFFERENT decision_maker job_title (see Rule 3).
+  The decision maker must logically match WHERE you find them. LinkedIn → senior titles. Indeed → hiring managers. Yelp → customer-facing roles. Google Maps → business owner/GM.
 
 Google Maps is always primary with format: "[industry] [city/region]"
 
@@ -995,11 +1042,11 @@ async def refresh_prospect_intel(request: ProspectIntelRequest):
     if not request.technology.strip():
         raise HTTPException(status_code=400, detail="Technology keyword is required")
 
-    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}"
+    cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}:{','.join(sorted(request.departments or []))}"
     # Delete existing cache
     db_manager.load_market_result("prospect_intel", request.technology, cache_key_raw)  # warm up
     # Just regenerate and overwrite
-    prompt = make_prospect_intel_prompt(request.technology, request.industry or "")
+    prompt = make_prospect_intel_prompt(request.technology, request.industry or "", request.departments or [])
     response = nvidia_chat(prompt, max_tokens=6000)
 
     result = None

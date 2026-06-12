@@ -349,8 +349,13 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
             setScrapeStatus('Scrape complete — fetching leads…');
             // Fetch new leads
             const leadsRes = await axios.get(`${API}/results`);
-            setScrapeLeads(leadsRes.data || []);
-            setScrapeStatus(`${leadsRes.data?.length || 0} leads loaded`);
+            const newLeads = leadsRes.data || [];
+            setScrapeLeads(newLeads);
+            setScrapeStatus(`${newLeads.length} leads loaded — auto-running signal scan…`);
+            // Auto-trigger signal scan after scrape completes
+            if (newLeads.length > 0 && data?.section2_signals) {
+              runSignalScan(newLeads);
+            }
           }
         } catch { clearInterval(scrapeIntervalRef.current); setScraping(false); }
       }, 2000);
@@ -360,25 +365,25 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
     }
   };
 
-  // ── Signal Scan ──────────────────────────────────────────────────────────
-  const handleSignalScan = async () => {
-    const leadsToScore = scrapeLeads.length > 0 ? scrapeLeads : globalLeads;
-    if (!leadsToScore.length || !data?.section2_signals) return;
+  // ── Core scoring logic (accepts leads directly to avoid stale state) ─────
+  const runSignalScan = (leadsInput) => {
+    const leadsToScore = leadsInput || (scrapeLeads.length > 0 ? scrapeLeads : globalLeads);
+    const signals = data?.section2_signals;
+    if (!leadsToScore.length || !signals) return;
     setScanning(true);
 
-    // Score client-side first
     const scored = leadsToScore.map(lead => {
-      const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, data.section2_signals);
+      const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, signals);
       return { ...lead, _overall: overall, _perPainPoint: perPainPoint };
     });
     scored.sort((a, b) => b._overall - a._overall);
     setScoredLeads(scored);
     setScanning(false);
+    setScrapeStatus(`${scored.length} leads scored`);
 
     // Save to Supabase for persistence
     if (submitted) {
       try {
-        // Strip React state fields before saving (only save plain lead data + scores)
         const toSave = scored.map(l => ({
           ...Object.fromEntries(Object.entries(l).filter(([k]) => !k.startsWith('_'))),
           _overall: l._overall,
@@ -386,14 +391,17 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
           _confirmed: l._confirmed,
           _unconfirmed: l._unconfirmed,
         }));
-        await axios.post('/api/prospect-intel/scan-results', {
+        axios.post('/api/prospect-intel/scan-results', {
           technology: submitted.technology,
           industry: submitted.industry,
           scored_leads: toSave
-        });
+        }).catch(() => {});
       } catch { /* silent — scan still shown even if save fails */ }
     }
   };
+
+  // ── Signal Scan (button handler) ──────────────────────────────────────────
+  const handleSignalScan = () => runSignalScan(null);
 
   // ── Export CSV ───────────────────────────────────────────────────────────
   const handleExportCSV = () => {
