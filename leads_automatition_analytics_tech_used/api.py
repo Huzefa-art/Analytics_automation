@@ -838,21 +838,79 @@ class ProspectIntelRequest(BaseModel):
     departments: Optional[list] = []   # selected department slugs; empty = all
 
 
+def _build_industry_source_profile(industry: str) -> dict:
+    """Return allowed review platforms, industry vocabulary, and B2C flag based on industry."""
+    ind = (industry or "").lower().strip()
+    # B2C hospitality industries — these are the ONLY ones where Yelp/TripAdvisor/OpenTable make sense
+    hospitality = {"restaurants", "restaurant", "hotels", "hotel", "hospitality", "cafes", "cafe",
+                   "bars", "bar", "pub", "pubs", "nightclub", "spa", "salon", "beauty",
+                   "fast food", "fast casual", "fine dining", "catering", "food truck",
+                   "bakery", "coffee shop", "ice cream", "pizza", "sushi"}
+    # B2C non-hospitality — Yelp ok, TripAdvisor not
+    retail_b2c = {"retail", "ecommerce", "e-commerce", "real estate", "real-estate",
+                  "fitness", "gym", "dental", "medical", "clinic", "veterinary", "auto repair",
+                  "plumbing", "hvac", "electrician", "landscaping", "cleaning", "photography",
+                  "wedding", "event planning", "education", "tutoring"}
+
+    is_hospitality = any(h in ind for h in hospitality)
+    is_b2c = is_hospitality or any(r in ind for r in retail_b2c)
+
+    if is_hospitality:
+        review_platforms = "Yelp, TripAdvisor, Google Reviews, Trustpilot"
+        booking_platforms = "OpenTable, Resy, Zomato (for restaurants); Booking.com, Expedia (for hotels)"
+        review_signals = "customer reviews mentioning long wait times, rude staff, bad food/service, slow response, poor communication, missed reservations"
+    elif is_b2c:
+        review_platforms = "Yelp, Google Reviews, Trustpilot"
+        booking_platforms = "industry-specific booking platforms relevant to the niche"
+        review_signals = "customer reviews mentioning poor communication, slow response, unprofessional service, missed appointments"
+    else:
+        # B2B industries (logistics, manufacturing, SaaS, construction, etc.)
+        review_platforms = "Google Reviews (if applicable), Trustpilot, industry-specific review sites"
+        booking_platforms = "NOT APPLICABLE — do not use restaurant/hotel booking platforms"
+        review_signals = "NOT APPLICABLE — do not use consumer review language (wait times, rude staff, bad food). Instead use industry-specific evidence: shipment delays, carrier complaints, invoice errors, compliance gaps, missed SLAs"
+
+    return {
+        "is_b2c": is_b2c,
+        "is_hospitality": is_hospitality,
+        "review_platforms": review_platforms,
+        "booking_platforms": booking_platforms,
+        "review_signals": review_signals,
+    }
+
+
 def make_prospect_intel_prompt(technology: str, industry: str, departments: list = None) -> str:
     from market_research import resolve_department_labels, DEFAULT_DEPARTMENTS
     industry_scope = f"the {industry} industry" if industry else "all industries"
+    sp = _build_industry_source_profile(industry)
 
     if departments and "all" not in departments:
         dept_labels = resolve_department_labels(industry, departments)
         dept_context = "Focus ONLY on these departments/stakeholders:\n" + "\n".join(f"- {d}" for d in dept_labels)
     else:
-        # Resolve labels for the default/recommended set if none selected
-        # But for the prompt, we can also just say "all departments"
-        dept_context = "Cover ALL relevant departments for this industry (including Front/Back of house, Ops, Management, etc. as appropriate)."
+        dept_context = "Cover ALL relevant departments for this industry (including department groups appropriate to the industry, NOT generic corporate roles)."
 
+    # Build industry-specific source list
+    if sp["is_hospitality"]:
+        allowed_sources = f"""Business website, Google Maps, Google Search snippet,
+BuiltWith.com/Wappalyzer, {sp["review_platforms"]}, {sp["booking_platforms"]},
+Indeed/LinkedIn public job search, Google Jobs SERP, Google News, Yellow Pages/Foursquare/Bark.com,
+Glassdoor public, Similarweb public. For Facebook/Instagram: Google Search snippet only."""
+    elif sp["is_b2c"]:
+        allowed_sources = f"""Business website, Google Maps, Google Search snippet,
+BuiltWith.com/Wappalyzer, {sp["review_platforms"]},
+Indeed/LinkedIn public job search, Google Jobs SERP, Google News, Yellow Pages/Foursquare/Bark.com,
+Glassdoor public, Similarweb public. For Facebook/Instagram: Google Search snippet only."""
+    else:
+        allowed_sources = f"""Business website, Google Maps, Google Search snippet,
+BuiltWith.com/Wappalyzer, {sp["review_platforms"]},
+Indeed/LinkedIn public job search, Google Jobs SERP, Google News, industry trade directories,
+ThomasNet (for manufacturing/logistics), Clutch.co (for services), Glassdoor public, Similarweb public.
+DO NOT use: TripAdvisor, OpenTable, Resy, Zomato, Yelp — these platforms do NOT list {industry_scope} businesses.
+For Facebook/Instagram: Google Search snippet only."""
 
     return f"""You are a senior B2B sales strategist and market intelligence analyst.
 You have deep knowledge of real-world org structures, job responsibilities, and buying authority.
+You think in the specific language and metrics of the target industry — you NEVER copy concepts from unrelated industries.
 
 A company sells: {technology}
 Target market: {industry_scope}
@@ -864,79 +922,99 @@ Generate a structured Prospect Intelligence Report with exactly THREE sections.
 ═══ CRITICAL VALIDATION RULES (APPLY TO EVERY FIELD) ═══
 Before outputting ANY pain point, signal, or lead source, apply these hard rules:
 
+RULE 0 — INDUSTRY ISOLATION (MOST IMPORTANT):
+This report is about {industry_scope} ONLY.
+Do NOT import concepts, metrics, platforms, or language from ANY other industry.
+- If the industry is logistics/manufacturing: NEVER mention TripAdvisor, Yelp restaurants, "wait times", "bad food", "rude staff", OpenTable, Resy, Zomato, or any hospitality concept. Use logistics language: shipment delays, carrier communication gaps, tracking visibility, freight costs, SLA breaches, compliance violations.
+- If the industry is restaurants/hospitality: NEVER mention supply chain, freight, carriers, warehouse ops, or B2B procurement. Use hospitality language: covers, reservations, guest experience, table turns, wait times.
+- If the industry is SaaS/tech: NEVER mention physical operations, walk-ins, or foot traffic. Use SaaS language: churn, MRR, onboarding, support tickets, feature adoption.
+Before EVERY field you output, ask: "Does this concept actually exist in {industry_scope}?" If not, replace it with something that does.
+
 RULE 1 — DIRECT SOLUTION ONLY:
 Every pain point MUST be a problem where "{technology}" is a DIRECT and OBVIOUS solution.
 If a reasonable person would say "that's a stretch" or "{technology} doesn't really fix that," REMOVE the pain point entirely.
-Example of BAD: "Inadequate Staff Training" → chatbots do NOT train staff. Remove it.
-Example of GOOD: "Missed After-Hours Enquiries" → chatbots capture 24/7 conversations. Keep it.
+Example of BAD: "Inadequate Staff Training" -> chatbots do NOT train staff. Remove it.
+Example of GOOD: "Missed After-Hours Enquiries" -> chatbots capture 24/7 conversations. Keep it.
 
 RULE 2 — DEPARTMENT-CONTACT ACCURACY:
-The "who_feels_pain" job titles and "who_to_contact" job title MUST be people whose ACTUAL day-to-day responsibilities include this problem.
-- Supply chain visibility problems → Supply Chain Manager, Logistics Director, Operations Director. NEVER a Receptionist, Server, or Host.
-- Customer wait time / front-of-house issues → FOH Manager, General Manager. NEVER a back-office role.
-- Data/inventory accuracy → Inventory Controller, Warehouse Manager, Ops Manager.
-- Booking/reservation gaps → Reservations Manager, Front Desk Supervisor, GM.
+The "who_feels_pain" job titles and "who_to_contact" job title MUST be people whose ACTUAL day-to-day responsibilities include this problem IN {industry_scope.upper()}.
+Job titles must be real titles that exist in this industry. Examples:
+- Logistics: Supply Chain Manager, Fleet Manager, Logistics Coordinator, Warehouse Manager, Procurement Manager, VP Operations, Carrier Relations Manager, Dispatch Supervisor.
+- Manufacturing: Plant Manager, Production Supervisor, Quality Manager, Maintenance Manager.
+- SaaS: Product Manager, CTO, VP Engineering, Head of Customer Success.
+- Restaurants: General Manager, FOH Manager, Kitchen Manager, Owner/Operator.
 Ask yourself: "Would this person LOSE SLEEP over this problem?" If no, pick someone else.
 
 RULE 3 — DIFFERENT DECISION MAKERS PER SOURCE:
 Each lead source in Section 3 MUST point to a DIFFERENT decision maker job title.
-Do NOT repeat the same "Operations Manager" across all 6 sources.
-Instead: Google Maps → Owner/GM, LinkedIn → Operations Director, Indeed → HR/People Manager, Glassdoor → COO, Yelp → Customer Experience Manager, etc.
+Do NOT repeat the same title across multiple sources.
+Instead, match decision makers to where they are found:
+- Google Maps -> business Owner or GM (they manage the listing)
+- LinkedIn -> senior director/VP titles (they are active on LinkedIn)
+- Indeed -> the hiring manager for the relevant role
+- Glassdoor -> COO or HR Director (they monitor employer brand)
+- Industry directories -> department-specific managers
+- Trade publications -> thought leaders and VPs
 The decision maker must logically match the source context.
 
 RULE 4 — SOURCE-SIGNAL LOGIC:
-Review platforms (Yelp, Google Reviews, TripAdvisor) reveal CUSTOMER-FACING problems ONLY:
-  - Long wait times, rude staff, bad food, slow service, poor communication.
-  - They NEVER reveal internal back-office issues like data entry errors, supply chain inefficiency, or inventory mismanagement.
-Never use Yelp/Google Reviews as evidence for internal operational problems.
-Use review platforms ONLY for pain points visible to end customers.
+Use ONLY platforms where {industry_scope} businesses actually exist.
+Review/evidence platforms:
+  {sp["review_platforms"]}
+  Signals available: {sp["review_signals"]}
+Booking/industry platforms:
+  {sp["booking_platforms"]}
+BuiltWith/Wappalyzer: technology presence/absence — good for ALL pain points.
+Indeed/LinkedIn job posts: hiring signals reveal operational gaps.
+Business website: UX, chat presence, booking/quoting flow — good for ALL pain points.
+NEVER use a platform that doesn't list businesses in {industry_scope}.
+Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer). Weights sum to 100%.
 
 RULE 5 — PAIN POINT COUNT:
-Generate exactly 4-5 pain points. Quality over quantity. Each must pass Rules 1-4 above.
+Generate exactly 4-5 pain points. Quality over quantity. Each must pass Rules 0-4 above.
 
 ═══ SECTION 1 — PAIN POINTS ═══
 Generate 4-5 pain points that "{technology}" DIRECTLY solves for {industry_scope}.
+Each pain point must use {industry_scope} language and metrics, not concepts from other industries.
 For each pain point:
 - title: short compelling name (max 6 words)
-- description: 2-3 sentences explaining the real-world business problem
-- revenue_impact: specific stat e.g. "businesses report 23% reduction in missed bookings after implementing this"
+- description: 2-3 sentences explaining the real-world business problem IN {industry_scope} terms
+- revenue_impact: specific stat relevant to {industry_scope}
 - frequency: one of "very common" / "common" / "occasional"
 - why_tech_solves: 1 sentence explaining exactly how {technology} fixes this pain
-- who_feels_pain: list of departments and job titles who experience this pain DAILY and would LOSE SLEEP over it.
+- who_feels_pain: list of departments and job titles who experience this pain DAILY in {industry_scope} companies.
   Format: [{{"department": "...", "job_titles": ["...", "..."]}}]
   Only include departments from the department focus above.
-  VALIDATE: does each job title genuinely own this problem? (See Rule 2)
+  VALIDATE: does each job title genuinely exist in {industry_scope}? Does this person own this problem?
 
 ═══ SECTION 2 — SIGNAL DETECTION PLAN ═══
 For EACH pain point above, generate signals proving a business faces that problem and lacks {technology}.
 SIDE 1 (solution_gap): proof business has NO {technology} installed.
-SIDE 2 (problem_evidence): external proof the pain EXISTS.
+SIDE 2 (problem_evidence): external proof the pain EXISTS in {industry_scope} terms.
 
 For each signal block also include:
 - who_to_contact: the ONE specific person to reach when this signal is confirmed.
-  This person must DIRECTLY OWN the problem domain (see Rule 2).
-  Format: {{"department": "...", "job_title": "...", "why": "1 sentence on why this person is the right contact"}}
-  The "why" must reference their specific responsibilities, NOT generic authority.
+  This person must DIRECTLY OWN the problem domain in {industry_scope} companies (see Rule 2).
+  Format: {{"department": "...", "job_title": "...", "why": "1 sentence referencing their specific {industry_scope} responsibilities"}}
 
-ALLOWED SOURCES ONLY (no login): Business website, Google Maps, Google Search snippet,
-BuiltWith.com/Wappalyzer, Yelp/TripAdvisor/Trustpilot, OpenTable/Resy/Zomato,
-Indeed/LinkedIn public job search, Google Jobs SERP, Google News, Yellow Pages/Foursquare/Bark.com,
-Glassdoor public, Similarweb public. For Facebook/Instagram: Google Search snippet only.
+ALLOWED SOURCES:
+{allowed_sources}
 
 SOURCE-SIGNAL MATCHING (Rule 4):
-- Review platforms (Yelp, TripAdvisor, Google Reviews): ONLY for customer-visible problems.
+Use only sources that list businesses in {industry_scope}. If a platform doesn't apply, skip it entirely.
 - BuiltWith/Wappalyzer: technology presence/absence — good for ALL pain points.
 - Indeed/LinkedIn job posts: hiring signals reveal operational gaps.
-- Business website: UX, chat presence, booking flow — good for ALL pain points.
+- Business website: UX, chat presence, workflow features — good for ALL pain points.
 Minimum 3 signals per pain point (at least 1 from BuiltWith/Wappalyzer). Weights sum to 100%.
 
 ═══ SECTION 3 — AUDIENCE & LEAD SOURCES ═══
 Generate a lead sourcing plan — 5-7 sources.
+Use ONLY platforms where {industry_scope} businesses can be found.
 For each source: platform, search_keyword, why, estimated_volume, filter_tip, is_primary, AND:
 - decision_maker: who to email/call from THIS SPECIFIC SOURCE.
   Format: {{"job_title": "...", "department": "...", "why": "...", "how_to_find": "LinkedIn search tip or Google operator"}}
   CRITICAL: Each source MUST have a DIFFERENT decision_maker job_title (see Rule 3).
-  The decision maker must logically match WHERE you find them. LinkedIn → senior titles. Indeed → hiring managers. Yelp → customer-facing roles. Google Maps → business owner/GM.
+  The decision maker must logically match WHERE you find them and must be a real title in {industry_scope}.
 
 Google Maps is always primary with format: "[industry] [city/region]"
 
@@ -1004,6 +1082,57 @@ def _parse_prospect_intel_response(response: str) -> Optional[dict]:
     return None
 
 
+def _validate_industry_isolation(result: dict, industry: str) -> list:
+    """Check the generated output for cross-industry contamination.
+    Returns a list of violation strings. Empty list = clean."""
+    import json
+    violations = []
+    ind = (industry or "").lower().strip()
+    raw = json.dumps(result).lower()
+
+    # Define forbidden terms per industry family
+    hospitality_only_terms = ["tripadvisor", "opentable", "resy", "zomato", "table turn",
+                              "covers per night", "guest experience", "host stand",
+                              "wait time estimator", "reservation system", "bad food",
+                              "rude staff", "slow service", "yelp"]
+    b2b_terms = ["shipment delay", "carrier", "freight", "warehouse", "supply chain",
+                 "logistics", "fleet", "procurement", "invoice", "compliance",
+                 "sla", "bill of lading"]
+
+    is_hospitality = any(h in ind for h in [
+        "restaurant", "hotel", "hospitality", "cafe", "bar", "pub", "dining",
+        "catering", "bakery", "coffee shop", "spa", "salon"
+    ])
+    is_b2b = any(b in ind for b in [
+        "logistics", "manufacturing", "supply chain", "freight", "warehouse",
+        "construction", "industrial", "wholesale", "distribution"
+    ])
+
+    if is_b2b and not is_hospitality:
+        # Check for hospitality bleed in B2B output
+        for term in hospitality_only_terms:
+            if term in raw:
+                violations.append(f"Hospitality term '{term}' found in {industry} output")
+
+    if is_hospitality and not is_b2b:
+        # Check for B2B logistics bleed in hospitality output
+        for term in b2b_terms:
+            if term in raw:
+                violations.append(f"B2B term '{term}' found in {industry} output")
+
+    # Check for duplicate decision maker titles in section3
+    sources = result.get("section3_lead_sources", [])
+    titles = [s.get("decision_maker", {}).get("job_title", "").strip().lower()
+              for s in sources if s.get("decision_maker")]
+    if len(titles) > 1:
+        from collections import Counter
+        dupes = {t: c for t, c in Counter(titles).items() if c > 1}
+        if dupes:
+            violations.append(f"Duplicate decision makers in lead sources: {dupes}")
+
+    return violations
+
+
 @app.post("/prospect-intel/generate")
 async def generate_prospect_intel(request: ProspectIntelRequest):
     from market_research import nvidia_chat
@@ -1016,7 +1145,12 @@ async def generate_prospect_intel(request: ProspectIntelRequest):
     cache_key_raw = f"prospect:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}:{','.join(sorted(request.departments or []))}"
     cached = db_manager.load_market_result("prospect_intel", request.technology, cache_key_raw)
     if cached:
-        return cached
+        # Validate cached result too — if contaminated, regenerate
+        violations = _validate_industry_isolation(cached, request.industry or "")
+        if not violations:
+            return cached
+        # Cache is contaminated — fall through to regenerate
+        print(f"[prospect-intel] Cache contaminated for {cache_key_raw}, regenerating. Violations: {violations}")
 
     prompt = make_prospect_intel_prompt(request.technology, request.industry or "", request.departments or [])
     response = nvidia_chat(prompt, max_tokens=6000)
@@ -1028,6 +1162,30 @@ async def generate_prospect_intel(request: ProspectIntelRequest):
 
     if not result:
         raise HTTPException(status_code=500, detail="LLM returned no parseable JSON")
+
+    # Validate industry isolation — retry once if contaminated
+    violations = _validate_industry_isolation(result, request.industry or "")
+    if violations:
+        print(f"[prospect-intel] Contamination detected, retrying. Violations: {violations}")
+        # Retry with stronger prompt
+        retry_prompt = prompt + (
+            f"\n\nIMPORTANT: Your previous attempt had industry contamination issues: "
+            f"{'; '.join(violations)}. "
+            f"The target industry is {request.industry or 'general'} ONLY. "
+            f"Remove ALL concepts, platforms, and language from other industries. "
+            f"Each lead source must have a UNIQUE decision maker title."
+        )
+        response = nvidia_chat(retry_prompt, max_tokens=6000)
+        try:
+            result = _parse_prospect_intel_response(response)
+        except Exception:
+            pass
+        if not result:
+            raise HTTPException(status_code=500, detail="LLM retry failed — no parseable JSON")
+        # Check again but accept even if still imperfect
+        violations2 = _validate_industry_isolation(result, request.industry or "")
+        if violations2:
+            print(f"[prospect-intel] Still contaminated after retry: {violations2} — serving anyway")
 
     # Save to Supabase
     db_manager.save_market_result("prospect_intel", request.technology, cache_key_raw, result)
@@ -1066,6 +1224,25 @@ async def refresh_prospect_intel(request: ProspectIntelRequest):
 
     if not result:
         raise HTTPException(status_code=500, detail="LLM returned no parseable JSON")
+
+    # Validate industry isolation — retry once if contaminated
+    violations = _validate_industry_isolation(result, request.industry or "")
+    if violations:
+        print(f"[prospect-intel/refresh] Contamination detected, retrying. Violations: {violations}")
+        retry_prompt = prompt + (
+            f"\n\nIMPORTANT: Your previous attempt had industry contamination issues: "
+            f"{'; '.join(violations)}. "
+            f"The target industry is {request.industry or 'general'} ONLY. "
+            f"Remove ALL concepts, platforms, and language from other industries. "
+            f"Each lead source must have a UNIQUE decision maker title."
+        )
+        response = nvidia_chat(retry_prompt, max_tokens=6000)
+        try:
+            result = _parse_prospect_intel_response(response)
+        except Exception:
+            pass
+        if not result:
+            raise HTTPException(status_code=500, detail="LLM retry failed — no parseable JSON")
 
     db_manager.save_market_result("prospect_intel", request.technology, cache_key_raw, result)
     return result
