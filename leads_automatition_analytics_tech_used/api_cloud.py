@@ -514,6 +514,31 @@ async def refresh_prospect_intel(request: ProspectIntelRequest):
 async def health():
     return {"status": "ok", "mode": "cloud"}
 
+# ── Prospect Intel scan results save/load ─────────────────────────────────────
+class ScanResultsSaveRequest(BaseModel):
+    technology: str
+    industry: str
+    scored_leads: list   # list of scored lead dicts
+
+@app.post("/prospect-intel/scan-results")
+async def save_scan_results(request: ScanResultsSaveRequest):
+    """Save signal scan scored results to Supabase for persistence."""
+    cache_key = f"scan:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}"
+    db_manager.save_market_result(
+        "prospect_scan", request.technology, cache_key,
+        {"scored_leads": request.scored_leads, "technology": request.technology, "industry": request.industry}
+    )
+    return {"status": "saved", "count": len(request.scored_leads)}
+
+@app.get("/prospect-intel/scan-results")
+async def load_scan_results(technology: str, industry: str = ""):
+    """Load previously saved scan results from Supabase."""
+    cache_key = f"scan:{technology.lower().strip()}:{(industry or '').lower().strip()}"
+    cached = db_manager.load_market_result("prospect_scan", technology, cache_key)
+    if not cached:
+        raise HTTPException(status_code=404, detail="No saved scan results for this technology")
+    return cached
+
 if __name__ == "__main__":
     import uvicorn
     db_manager.init_db()

@@ -210,6 +210,14 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
       setFromCache(true);
       const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
       if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
+
+      // Try to load saved scan results for this tech+industry
+      try {
+        const scanRes = await axios.get(`/api/prospect-intel/scan-results?technology=${encodeURIComponent(tech)}&industry=${encodeURIComponent(ind)}`);
+        if (scanRes.data?.scored_leads?.length) {
+          setScoredLeads(scanRes.data.scored_leads);
+        }
+      } catch { /* no saved scan yet */ }
     } catch (err) {
       setError(err?.response?.data?.detail || 'Failed to load saved run.');
     } finally {
@@ -247,6 +255,14 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
       // Auto-set scrape keyword from primary source
       const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
       if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
+
+      // Try to load previously saved scan results
+      try {
+        const scanRes = await axios.get(`/api/prospect-intel/scan-results?technology=${encodeURIComponent(sub.technology)}&industry=${encodeURIComponent(sub.industry)}`);
+        if (scanRes.data?.scored_leads?.length) {
+          setScoredLeads(scanRes.data.scored_leads);
+        }
+      } catch { /* no saved scan yet — user needs to run it */ }
 
       // Refresh history panel so new entry appears
       fetchHistory();
@@ -292,20 +308,38 @@ export default function ProspectIntelligence({ leads: globalLeads = [], onSendTo
   };
 
   // ── Signal Scan ──────────────────────────────────────────────────────────
-  const handleSignalScan = () => {
+  const handleSignalScan = async () => {
     const leadsToScore = scrapeLeads.length > 0 ? scrapeLeads : globalLeads;
     if (!leadsToScore.length || !data?.section2_signals) return;
     setScanning(true);
 
-    setTimeout(() => {
-      const scored = leadsToScore.map(lead => {
-        const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, data.section2_signals);
-        return { ...lead, _overall: overall, _perPainPoint: perPainPoint };
-      });
-      scored.sort((a, b) => b._overall - a._overall);
-      setScoredLeads(scored);
-      setScanning(false);
-    }, 800);
+    // Score client-side first
+    const scored = leadsToScore.map(lead => {
+      const { overall, perPainPoint } = scoreLeadAgainstSignals(lead, data.section2_signals);
+      return { ...lead, _overall: overall, _perPainPoint: perPainPoint };
+    });
+    scored.sort((a, b) => b._overall - a._overall);
+    setScoredLeads(scored);
+    setScanning(false);
+
+    // Save to Supabase for persistence
+    if (submitted) {
+      try {
+        // Strip React state fields before saving (only save plain lead data + scores)
+        const toSave = scored.map(l => ({
+          ...Object.fromEntries(Object.entries(l).filter(([k]) => !k.startsWith('_'))),
+          _overall: l._overall,
+          _perPainPoint: l._perPainPoint,
+          _confirmed: l._confirmed,
+          _unconfirmed: l._unconfirmed,
+        }));
+        await axios.post('/api/prospect-intel/scan-results', {
+          technology: submitted.technology,
+          industry: submitted.industry,
+          scored_leads: toSave
+        });
+      } catch { /* silent — scan still shown even if save fails */ }
+    }
   };
 
   // ── Export CSV ───────────────────────────────────────────────────────────
