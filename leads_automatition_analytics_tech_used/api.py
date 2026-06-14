@@ -1794,6 +1794,110 @@ def _pi_companies_house_sync(industry: str, location: str, max_results: int = 10
         print(f"[companies_house] {e}")
     return leads
 
+# ── Signal First helper functions ─────────────────────────────────────────────
+
+def _si_search_indeed(pain_keyword: str, industry: str, location: str, max_results: int = 8) -> list:
+    found = []
+    try:
+        import feedparser
+        q = urllib.parse.quote_plus(f"{pain_keyword} {industry}")
+        l_enc = urllib.parse.quote_plus(location)
+        url = f"https://www.indeed.com/rss?q={q}&l={l_enc}&limit={max_results}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=8)
+        if r.status_code != 200:
+            return found
+        feed = feedparser.parse(r.content)
+        for entry in feed.entries:
+            title = entry.get('title', '')
+            company = ''
+            if ' at ' in title:
+                company = title.split(' at ')[-1].strip()
+            elif ' - ' in title:
+                parts = title.split(' - ')
+                if len(parts) >= 2:
+                    company = parts[1].strip()
+            if company and len(company) > 2:
+                found.append({
+                    'company_name': company,
+                    'evidence_text': f"Indeed job posting: \"{title}\" — {entry.get('summary', '')[:200]}",
+                    'source_url': entry.get('link', ''),
+                    'source': 'Indeed Jobs',
+                })
+    except Exception as e:
+        print(f"[si_indeed] {e}")
+    return found
+
+
+def _si_search_reddit(pain_keyword: str, industry: str, max_results: int = 5) -> list:
+    found = []
+    try:
+        ind_lower = industry.lower()
+        subs = _PI_REDDIT_SUBS.get(ind_lower, ["smallbusiness", "entrepreneur"])
+        query_enc = urllib.parse.quote(f"{pain_keyword} {industry}")
+        for sub in subs[:2]:
+            r = requests.get(
+                f"https://arctic-shift.photon-reddit.com/api/posts/search?q={query_enc}&subreddit={sub}&limit=5&sort=score",
+                timeout=8
+            )
+            if r.status_code == 200:
+                for post in r.json().get("data", [])[:3]:
+                    found.append({
+                        'company_name': None,
+                        'evidence_text': f"r/{sub}: {post.get('title', '')} — {post.get('selftext', '')[:200]}",
+                        'source_url': f"https://reddit.com{post.get('permalink', '')}",
+                        'source': f"Reddit r/{sub}",
+                    })
+    except Exception as e:
+        print(f"[si_reddit] {e}")
+    return found
+
+
+def _si_search_news(pain_keyword: str, industry: str, location: str, max_results: int = 5) -> list:
+    found = []
+    try:
+        q = urllib.parse.quote_plus(f"{industry} {pain_keyword} {location}")
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-GB&gl=GB&ceid=GB:en"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return found
+        soup_ns = _BS4(r.content, 'xml')
+        for item in soup_ns.find_all('item')[:max_results]:
+            title_el = item.find('title')
+            link_el = item.find('link')
+            desc_el = item.find('description')
+            title = title_el.get_text() if title_el else ''
+            link = link_el.get_text() if link_el else ''
+            desc = desc_el.get_text() if desc_el else ''
+            if title:
+                found.append({
+                    'company_name': None,
+                    'evidence_text': f"Google News: \"{title}\" — {desc[:150]}",
+                    'source_url': link,
+                    'source': 'Google News',
+                })
+    except Exception as e:
+        print(f"[si_news] {e}")
+    return found
+
+
+def _si_enrich_company(company_name: str, location: str) -> dict:
+    try:
+        url = f"https://www.yellowpages.com/search?search_terms={urllib.parse.quote_plus(company_name)}&geo_location_terms={urllib.parse.quote_plus(location)}"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        soup = _BS4(resp.text, "html.parser")
+        listing = soup.find("div", class_="srp-listing")
+        if listing:
+            phone_el = listing.find("div", class_="phones")
+            web_el = listing.find("a", class_="track-visit-website")
+            return {
+                "phone": phone_el.get_text(strip=True) if phone_el else "",
+                "website": web_el.get("href", "") if web_el else "",
+            }
+    except Exception:
+        pass
+    return {"phone": "", "website": ""}
+
+
 # ── PI V2 request models ──────────────────────────────────────────────────────
 
 class PIV2PainPointsRequest(BaseModel):
@@ -1820,6 +1924,13 @@ class PIV2AnalyzeRequest(BaseModel):
     signal_plans: list
     technology: str = ""
     industry: str = ""
+    session_id: str = ""
+
+class PIV2SignalFirstRequest(BaseModel):
+    industry: str
+    location: str
+    signal_plans: list
+    num_leads: int = 20
     session_id: str = ""
 
 # ── Sub-tab 1: Pain Points ───────────────────────────────────────────────────
@@ -2180,6 +2291,168 @@ async def pi_v2_extract_status(session_id: str):
         raise HTTPException(404, "Session not found")
     return st
 
+# ── Sub-tab 3 Mode B: Signal First ───────────────────────────────────────────
+
+@app.post("/prospect-intel/v2/extract-leads-signal-first")
+async def pi_v2_extract_leads_signal_first(request: PIV2SignalFirstRequest, background_tasks: BackgroundTasks):
+    """Signal First mode: search for businesses already showing pain signals on Indeed, Reddit & News."""
+    if not request.industry or not request.location:
+        raise HTTPException(400, "Industry and location are required")
+    if not request.signal_plans:
+        raise HTTPException(400, "Signal plans are required for Signal First mode — complete Sub-tab 2 first")
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_extract_status[session_id] = {
+        "done": False, "progress": "Starting Signal First scan...",
+        "error": None, "leads": [], "source_results": {}
+    }
+    background_tasks.add_task(_pi_signal_first_task, request, session_id)
+    return {"session_id": session_id, "message": "Signal First extraction started"}
+
+
+async def _pi_signal_first_task(request: PIV2SignalFirstRequest, session_id: str):
+    def log(msg):
+        if session_id in _pi_v2_extract_status:
+            _pi_v2_extract_status[session_id]["progress"] = msg
+
+    loop = asyncio.get_event_loop()
+    raw_candidates = []
+    source_results = {}
+
+    for plan in request.signal_plans:
+        pain_title = plan.get("pain_point_title") or plan.get("pain_point", "")
+        keywords = [chk.get("what_to_search", "") for chk in plan.get("checks", [])[:3] if chk.get("what_to_search")]
+        pain_keyword = keywords[0] if keywords else pain_title
+
+        log(f"Signal scan: '{pain_title}' — searching Indeed, Reddit & News...")
+
+        indeed_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_indeed(kw, request.industry, request.location)
+        )
+        for h in indeed_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(indeed_hits)
+
+        reddit_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_reddit(kw, request.industry)
+        )
+        for h in reddit_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(reddit_hits)
+
+        news_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_news(kw, request.industry, request.location)
+        )
+        for h in news_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(news_hits)
+
+    for src_label in ['Indeed Jobs', 'Reddit', 'Google News']:
+        count = sum(1 for c in raw_candidates if src_label in c.get('source', ''))
+        source_results[src_label] = {"count": count, "status": "success" if count > 0 else "no_results"}
+
+    named = [c for c in raw_candidates if c.get('company_name')]
+    evidence_only = [c for c in raw_candidates if not c.get('company_name')]
+    source_results['Reddit (evidence context)'] = {
+        "count": len([e for e in evidence_only if 'Reddit' in e.get('source', '')]),
+        "status": "evidence_only"
+    }
+    source_results['Google News (evidence context)'] = {
+        "count": len([e for e in evidence_only if 'News' in e.get('source', '')]),
+        "status": "evidence_only"
+    }
+
+    seen_names: set = set()
+    unique_named = []
+    for c in named:
+        key = c['company_name'].lower().strip()
+        if key not in seen_names and len(key) > 2:
+            seen_names.add(key)
+            unique_named.append(c)
+
+    log(f"Found {len(unique_named)} named companies. Enriching with contact data...")
+
+    all_leads = []
+    for candidate in unique_named[:request.num_leads]:
+        log(f"Enriching: {candidate['company_name']}...")
+        enriched = await loop.run_in_executor(
+            None, lambda c=candidate: _si_enrich_company(c['company_name'], request.location)
+        )
+        website = enriched.get("website", "")
+        email = ""
+        if website and website not in ("N/A", ""):
+            wd = await loop.run_in_executor(None, lambda w=website: _pi_fetch_and_detect(w))
+            if wd.get("emails_found"):
+                email = wd["emails_found"][0]
+            if not email:
+                for path in ["/contact", "/contact-us"]:
+                    try:
+                        r = requests.get(website.rstrip("/") + path, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                        if r.status_code == 200:
+                            found_em = _re_pi.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", r.text)
+                            skip = {"sentry.io", "example.com", "schema.org", "w3.org"}
+                            valid = [e for e in found_em if not any(d in e for d in skip)]
+                            if valid:
+                                email = valid[0]
+                                break
+                    except Exception:
+                        pass
+
+        all_leads.append({
+            "business_name": candidate['company_name'],
+            "website": website,
+            "phone": enriched.get("phone", ""),
+            "email": email,
+            "rating": "", "review_count": "",
+            "category": request.industry,
+            "location": request.location,
+            "source": candidate['source'],
+            "is_duplicate": False,
+            "status": "unanalyzed",
+            "session_id": session_id,
+            "extraction_mode": "signal_first",
+            "signal_trigger": candidate.get('pain_trigger', ''),
+            "signal_evidence_text": candidate.get('evidence_text', ''),
+            "signal_source_url": candidate.get('source_url', ''),
+            "signal_confirmed": True,
+        })
+
+    seen_domains: set = set()
+    for lead in all_leads:
+        raw_web = lead.get("website", "")
+        domain = raw_web.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].lower()
+        if domain and domain in seen_domains:
+            lead["is_duplicate"] = True
+        elif domain:
+            seen_domains.add(domain)
+
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        for lead in all_leads:
+            cur.execute("""
+                INSERT INTO pi_leads (session_id, business_name, website, phone, email, rating,
+                    review_count, category, location, source, is_duplicate, status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (session_id, lead.get("business_name",""), lead.get("website",""),
+                  lead.get("phone",""), lead.get("email",""), lead.get("rating",""),
+                  lead.get("review_count",""), lead.get("category",""), lead.get("location",""),
+                  lead.get("source",""), lead.get("is_duplicate", False), "unanalyzed"))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_signal_first_save] {e}")
+
+    _pi_save_session(session_id, leads_count=len(all_leads))
+    _pi_v2_extract_status[session_id] = {
+        "done": True,
+        "progress": f"Done — {len(all_leads)} signal-confirmed companies found",
+        "error": None,
+        "leads": all_leads,
+        "source_results": source_results,
+        "unique": len([l for l in all_leads if not l.get("is_duplicate")]),
+        "duplicates": len([l for l in all_leads if l.get("is_duplicate")]),
+    }
+
 # ── Sub-tab 4: Signal Analyzer ───────────────────────────────────────────────
 
 _pi_v2_analyze_status: dict = {}  # session_id -> {done, progress, current, total, leads}
@@ -2228,10 +2501,29 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             domain = website.replace("https://", "").replace("http://", "").split("/")[0]
             builtwith_data = _pi_check_builtwith(domain)
 
-        # Evaluate every check from every signal plan
+        # Pre-populate signal evidence for Signal First leads
         all_checks = []
         confirmed_count = 0
         checkable_count = 0
+
+        if lead.get("signal_confirmed") and lead.get("signal_evidence_text"):
+            pre_check = {
+                "pain_point": lead.get("signal_trigger", ""),
+                "check_name": f"Signal-Confirmed via {lead.get('source', 'Signal First search')}",
+                "where_to_look": lead.get("signal_source_url", ""),
+                "what_to_search": "",
+                "confirmed_if": "Pre-confirmed — company was surfaced because it publicly advertised this pain",
+                "confirmed": "yes",
+                "evidence": lead.get("signal_evidence_text", ""),
+                "check_method": "signal_first_search",
+                "was_checkable": True,
+                "difficulty": "easy",
+                "signal_type": "signal_first",
+                "decision_maker": {},
+            }
+            all_checks.append(pre_check)
+            confirmed_count += 1
+            checkable_count += 1
 
         for plan in request.signal_plans:
             pain_title = plan.get("pain_point_title") or plan.get("pain_point", "")

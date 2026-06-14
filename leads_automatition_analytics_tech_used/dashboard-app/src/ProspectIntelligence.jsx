@@ -536,7 +536,8 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
 // ── Sub-tab 3: Lead Extraction ────────────────────────────────────────────────
 const SOURCES = ['Google Maps', 'Yellow Pages', 'Companies House UK', 'Bark.com', 'LinkedIn', 'Facebook Business'];
 
-function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
+function LeadExtractionTab({ onDone, existingLeads, masterSessionId, signalPlans }) {
+  const [extractionMode, setExtractionMode] = useState('leads_first');
   const [industry, setIndustry] = useState('');
   const [location, setLocation] = useState('');
   const [numLeads, setNumLeads] = useState(20);
@@ -548,42 +549,66 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
   const [sessionId, setSessionId] = useState('');
   const pollRef = useRef(null);
 
+  const poll = (sid) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const st = await axios.get(`${API}/prospect-intel/v2/extract-leads/status/${sid}`);
+        if (st.data.done) {
+          clearInterval(pollRef.current);
+          setLoading(false);
+          setLeads(st.data.leads || []);
+          setSourceResults(st.data.source_results || {});
+          onDone(st.data.leads || [], sid);
+        }
+      } catch {
+        clearInterval(pollRef.current);
+        setLoading(false);
+        setError('Lost connection while polling. Refresh to check results.');
+      }
+    }, 3000);
+  };
+
   const extract = async () => {
     if (!industry.trim() || !location.trim()) return;
+    if (extractionMode === 'signal_first' && (!signalPlans || !signalPlans.length)) {
+      setError('Signal First mode requires signal plans from Sub-tab 2. Please complete Sub-tab 2 first.');
+      return;
+    }
     setLoading(true);
     setError('');
     setLeads([]);
     setSourceResults({});
-    try {
-      const res = await axios.post(`${API}/prospect-intel/v2/extract-leads`, {
-        industry: industry.trim(),
-        location: location.trim(),
-        num_leads: numLeads,
-        sources,
-        session_id: masterSessionId || '',
-      });
-      const sid = res.data.session_id;
-      setSessionId(sid);
 
-      pollRef.current = setInterval(async () => {
-        try {
-          const st = await axios.get(`${API}/prospect-intel/v2/extract-leads/status/${sid}`);
-          if (st.data.done) {
-            clearInterval(pollRef.current);
-            setLoading(false);
-            setLeads(st.data.leads || []);
-            setSourceResults(st.data.source_results || {});
-            onDone(st.data.leads || [], sid);
-          }
-        } catch {
-          clearInterval(pollRef.current);
-          setLoading(false);
-          setError('Lost connection while polling. Refresh to check results.');
-        }
-      }, 3000);
-    } catch (e) {
-      setLoading(false);
-      setError(e?.response?.data?.detail || e?.message || 'Lead extraction failed');
+    if (extractionMode === 'leads_first') {
+      try {
+        const res = await axios.post(`${API}/prospect-intel/v2/extract-leads`, {
+          industry: industry.trim(),
+          location: location.trim(),
+          num_leads: numLeads,
+          sources,
+          session_id: masterSessionId || '',
+        });
+        setSessionId(res.data.session_id);
+        poll(res.data.session_id);
+      } catch (e) {
+        setLoading(false);
+        setError(e?.response?.data?.detail || e?.message || 'Lead extraction failed');
+      }
+    } else {
+      try {
+        const res = await axios.post(`${API}/prospect-intel/v2/extract-leads-signal-first`, {
+          industry: industry.trim(),
+          location: location.trim(),
+          num_leads: numLeads,
+          signal_plans: signalPlans,
+          session_id: masterSessionId || '',
+        });
+        setSessionId(res.data.session_id);
+        poll(res.data.session_id);
+      } catch (e) {
+        setLoading(false);
+        setError(e?.response?.data?.detail || e?.message || 'Signal First extraction failed');
+      }
     }
   };
 
@@ -601,6 +626,33 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
 
   return (
     <div>
+      {/* Extraction Mode Toggle */}
+      <div style={{ marginBottom: '1rem', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '1rem' }}>
+        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.6rem' }}>Extraction Mode</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button type="button" onClick={() => setExtractionMode('leads_first')} style={{
+            flex: 1, padding: '0.65rem 1rem', borderRadius: '8px', border: 'none', cursor: 'pointer',
+            background: extractionMode === 'leads_first' ? 'rgba(57,255,20,0.1)' : 'rgba(255,255,255,0.03)',
+            borderTop: extractionMode === 'leads_first' ? '2px solid #39ff14' : '2px solid transparent',
+            color: extractionMode === 'leads_first' ? '#39ff14' : 'var(--text-muted)',
+            fontWeight: extractionMode === 'leads_first' ? 700 : 400, fontSize: '0.82rem', textAlign: 'left', margin: 0, width: 'auto',
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: '2px' }}>Mode A — Leads First</div>
+            <div style={{ fontSize: '0.7rem', opacity: 0.75 }}>Scrape businesses by industry &amp; location, then run signal checks</div>
+          </button>
+          <button type="button" onClick={() => setExtractionMode('signal_first')} style={{
+            flex: 1, padding: '0.65rem 1rem', borderRadius: '8px', border: 'none', cursor: 'pointer',
+            background: extractionMode === 'signal_first' ? 'rgba(167,139,250,0.1)' : 'rgba(255,255,255,0.03)',
+            borderTop: extractionMode === 'signal_first' ? '2px solid #a78bfa' : '2px solid transparent',
+            color: extractionMode === 'signal_first' ? '#a78bfa' : 'var(--text-muted)',
+            fontWeight: extractionMode === 'signal_first' ? 700 : 400, fontSize: '0.82rem', textAlign: 'left', margin: 0, width: 'auto',
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: '2px' }}>Mode B — Signal First</div>
+            <div style={{ fontSize: '0.7rem', opacity: 0.75 }}>Find businesses already showing the pain on Indeed, Reddit &amp; News</div>
+          </button>
+        </div>
+      </div>
+
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div className="pi-v2-grid-1-1-auto" style={{ gap: '1rem' }}>
           <div>
@@ -617,33 +669,67 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
           </div>
         </div>
 
-        <div style={{ marginTop: '1rem' }}>
-          <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sources</label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            {SOURCES.map(src => {
-              const sel = sources.includes(src);
-              const automated = ['Google Maps', 'Yellow Pages', 'Companies House UK'].includes(src);
-              return (
-                <button key={src} type="button" onClick={() => setSources(prev => sel ? prev.filter(s => s !== src) : [...prev, src])}
-                  style={{
-                    margin: 0, width: 'auto', padding: '5px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: sel ? 700 : 400,
-                    background: sel ? 'rgba(57,255,20,0.1)' : 'rgba(255,255,255,0.03)',
-                    border: `1px solid ${sel ? 'rgba(57,255,20,0.4)' : 'rgba(255,255,255,0.1)'}`,
-                    color: sel ? '#39ff14' : 'var(--text-muted)',
-                    cursor: 'pointer', transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0,
-                  }}>
-                  {src} {!automated && <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(manual)</span>}
-                </button>
-              );
-            })}
+        {extractionMode === 'leads_first' && (
+          <div style={{ marginTop: '1rem' }}>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sources</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {SOURCES.map(src => {
+                const sel = sources.includes(src);
+                const automated = ['Google Maps', 'Yellow Pages', 'Companies House UK'].includes(src);
+                return (
+                  <button key={src} type="button" onClick={() => setSources(prev => sel ? prev.filter(s => s !== src) : [...prev, src])}
+                    style={{
+                      margin: 0, width: 'auto', padding: '5px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: sel ? 700 : 400,
+                      background: sel ? 'rgba(57,255,20,0.1)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${sel ? 'rgba(57,255,20,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                      color: sel ? '#39ff14' : 'var(--text-muted)',
+                      cursor: 'pointer', transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0,
+                    }}>
+                    {src} {!automated && <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(manual)</span>}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
+
+        {extractionMode === 'signal_first' && (
+          <div style={{ marginTop: '0.85rem' }}>
+            {(!signalPlans || !signalPlans.length) ? (
+              <div style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '8px', padding: '0.65rem 1rem', fontSize: '0.82rem', color: '#a78bfa', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Shield size={14} /> Signal First requires signal plans from Sub-tab 2 — complete Sub-tab 2 first, then return here.
+              </div>
+            ) : (
+              <div style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: '8px', padding: '0.65rem 1rem', fontSize: '0.78rem', color: '#a78bfa' }}>
+                <div style={{ fontWeight: 700, marginBottom: '4px' }}>Will scan for these {signalPlans.length} signal plans:</div>
+                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                  {signalPlans.map((p, i) => (
+                    <span key={i} style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '10px', padding: '1px 8px', fontSize: '0.68rem' }}>
+                      {p.pain_point_title || p.pain_point || `Plan ${i+1}`}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                  Sources: Indeed job postings · Reddit (Arctic Shift API) · Google News RSS — all bot-safe, no scraping blocked
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ marginTop: '1rem', display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button onClick={extract} disabled={loading || !industry.trim() || !location.trim()}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#39ff14', color: '#000', fontWeight: 800, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0 }}>
+          <button onClick={extract}
+            disabled={loading || !industry.trim() || !location.trim() || (extractionMode === 'signal_first' && (!signalPlans || !signalPlans.length))}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, border: 'none',
+              padding: '0.75rem 1.5rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0,
+              background: extractionMode === 'signal_first' ? '#a78bfa' : '#39ff14',
+              color: '#000',
+            }}>
             {loading ? <Loader size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
-            {loading ? 'Extracting...' : 'Extract Leads'}
+            {loading
+              ? (extractionMode === 'signal_first' ? 'Scanning signals...' : 'Extracting...')
+              : (extractionMode === 'signal_first' ? 'Run Signal First' : 'Extract Leads')}
           </button>
           {leads.length > 0 && (
             <button onClick={exportCSV} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.75rem 1rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0, fontSize: '0.82rem' }}>
@@ -662,8 +748,16 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
       {loading && (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
           <Loader size={28} className="animate-spin" style={{ color: '#39ff14' }} />
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Scraping leads and hunting emails...</span>
-          <span style={{ fontSize: '0.78rem', color: 'rgba(57,255,20,0.5)' }}>This may take 1–3 minutes depending on sources</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            {extractionMode === 'signal_first'
+              ? 'Scanning Indeed, Reddit & News for businesses showing the pain signal...'
+              : 'Scraping leads and hunting emails...'}
+          </span>
+          <span style={{ fontSize: '0.78rem', color: extractionMode === 'signal_first' ? 'rgba(167,139,250,0.5)' : 'rgba(57,255,20,0.5)' }}>
+            {extractionMode === 'signal_first'
+              ? 'Searching job boards and enriching company contact data...'
+              : 'This may take 1–3 minutes depending on sources'}
+          </span>
         </div>
       )}
 
@@ -692,46 +786,76 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
             </h3>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-              <thead>
-                <tr style={{ background: '#141417' }}>
-                  {['Business', 'Website', 'Phone', 'Email', 'Rating', 'Category', 'Source', 'Status'].map(h => (
-                    <th key={h} style={{ padding: '0.6rem 0.85rem', textAlign: 'left', color: 'var(--gold-primary)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.6px', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(212,175,55,0.2)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {leads.map((l, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: l.is_duplicate ? 'rgba(255,223,0,0.03)' : 'transparent' }}>
-                    <td style={{ padding: '0.55rem 0.85rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap' }}>{l.business_name || '—'}</td>
-                    <td style={{ padding: '0.55rem 0.85rem' }}>
-                      {l.website && l.website !== 'N/A' ? (
-                        <a href={l.website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold-secondary)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}>
-                          <Globe size={10} /> {l.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].slice(0, 25)}
-                        </a>
-                      ) : <span style={{ color: '#555' }}>—</span>}
-                    </td>
-                    <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)' }}>{l.phone || '—'}</td>
-                    <td style={{ padding: '0.55rem 0.85rem' }}>
-                      {l.email ? <span style={{ color: '#a7f3d0', fontSize: '0.75rem' }}>{l.email}</span> : <span style={{ color: '#555', fontSize: '0.72rem', fontStyle: 'italic' }}>not found</span>}
-                    </td>
-                    <td style={{ padding: '0.55rem 0.85rem', color: l.rating ? '#ffdf00' : '#555' }}>
-                      {l.rating ? <><Star size={10} style={{ verticalAlign: 'middle' }} /> {l.rating}</> : '—'}
-                    </td>
-                    <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)', fontSize: '0.72rem' }}>{l.category || '—'}</td>
-                    <td style={{ padding: '0.55rem 0.85rem' }}>
-                      <span style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', fontSize: '0.62rem', padding: '1px 6px', borderRadius: '8px' }}>{l.source}</span>
-                    </td>
-                    <td style={{ padding: '0.55rem 0.85rem' }}>
-                      {l.is_duplicate
-                        ? <span style={{ fontSize: '0.62rem', color: '#ffdf00', background: 'rgba(255,223,0,0.1)', border: '1px solid rgba(255,223,0,0.25)', padding: '1px 6px', borderRadius: '8px' }}>duplicate</span>
-                        : <span style={{ fontSize: '0.62rem', color: '#39ff14', background: 'rgba(57,255,20,0.08)', border: '1px solid rgba(57,255,20,0.2)', padding: '1px 6px', borderRadius: '8px' }}>unique</span>
-                      }
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {(() => {
+              const hasSignalLeads = leads.some(l => l.extraction_mode === 'signal_first');
+              const headers = hasSignalLeads
+                ? ['Business', 'Website', 'Phone', 'Email', 'Signal Trigger', 'Source', 'Status']
+                : ['Business', 'Website', 'Phone', 'Email', 'Rating', 'Category', 'Source', 'Status'];
+              return (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                  <thead>
+                    <tr style={{ background: '#141417' }}>
+                      {headers.map(h => (
+                        <th key={h} style={{ padding: '0.6rem 0.85rem', textAlign: 'left', color: 'var(--gold-primary)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.6px', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(212,175,55,0.2)' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leads.map((l, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: l.is_duplicate ? 'rgba(255,223,0,0.03)' : l.extraction_mode === 'signal_first' ? 'rgba(167,139,250,0.02)' : 'transparent' }}>
+                        <td style={{ padding: '0.55rem 0.85rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap' }}>
+                          {l.business_name || '—'}
+                          {l.extraction_mode === 'signal_first' && (
+                            <span style={{ marginLeft: '6px', fontSize: '0.58rem', background: 'rgba(57,255,20,0.12)', border: '1px solid rgba(57,255,20,0.3)', color: '#39ff14', padding: '1px 5px', borderRadius: '6px' }}>⚡ confirmed</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.55rem 0.85rem' }}>
+                          {l.website && l.website !== 'N/A' ? (
+                            <a href={l.website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold-secondary)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}>
+                              <Globe size={10} /> {l.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].slice(0, 25)}
+                            </a>
+                          ) : <span style={{ color: '#555' }}>—</span>}
+                        </td>
+                        <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)' }}>{l.phone || '—'}</td>
+                        <td style={{ padding: '0.55rem 0.85rem' }}>
+                          {l.email ? <span style={{ color: '#a7f3d0', fontSize: '0.75rem' }}>{l.email}</span> : <span style={{ color: '#555', fontSize: '0.72rem', fontStyle: 'italic' }}>not found</span>}
+                        </td>
+                        {hasSignalLeads ? (
+                          <td style={{ padding: '0.55rem 0.85rem', maxWidth: '200px' }}>
+                            {l.signal_trigger ? (
+                              <div>
+                                <div style={{ fontSize: '0.7rem', color: '#a78bfa', fontWeight: 600, marginBottom: '2px' }}>{l.signal_trigger}</div>
+                                {l.signal_evidence_text && (
+                                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }} title={l.signal_evidence_text}>
+                                    {l.signal_evidence_text.slice(0, 80)}…
+                                  </div>
+                                )}
+                              </div>
+                            ) : <span style={{ color: '#555' }}>—</span>}
+                          </td>
+                        ) : (
+                          <>
+                            <td style={{ padding: '0.55rem 0.85rem', color: l.rating ? '#ffdf00' : '#555' }}>
+                              {l.rating ? <><Star size={10} style={{ verticalAlign: 'middle' }} /> {l.rating}</> : '—'}
+                            </td>
+                            <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)', fontSize: '0.72rem' }}>{l.category || '—'}</td>
+                          </>
+                        )}
+                        <td style={{ padding: '0.55rem 0.85rem' }}>
+                          <span style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', fontSize: '0.62rem', padding: '1px 6px', borderRadius: '8px' }}>{l.source}</span>
+                        </td>
+                        <td style={{ padding: '0.55rem 0.85rem' }}>
+                          {l.is_duplicate
+                            ? <span style={{ fontSize: '0.62rem', color: '#ffdf00', background: 'rgba(255,223,0,0.1)', border: '1px solid rgba(255,223,0,0.25)', padding: '1px 6px', borderRadius: '8px' }}>duplicate</span>
+                            : <span style={{ fontSize: '0.62rem', color: '#39ff14', background: 'rgba(57,255,20,0.08)', border: '1px solid rgba(57,255,20,0.2)', padding: '1px 6px', borderRadius: '8px' }}>unique</span>
+                          }
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -810,11 +934,17 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
   const painTitles = [...new Set(signalPlans.map(p => p.pain_point_title || p.pain_point || '').filter(Boolean))];
   const dmOptions = [...new Set(analyzed.map(l => l.decision_maker).filter(Boolean))];
 
-  const filtered = analyzed.filter(l => {
-    if (l.signal_score < filterScore) return false;
-    if (filterDM !== 'all' && l.decision_maker !== filterDM) return false;
-    return true;
-  });
+  const filtered = analyzed
+    .filter(l => {
+      if (l.signal_score < filterScore) return false;
+      if (filterDM !== 'all' && l.decision_maker !== filterDM) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.extraction_mode === 'signal_first' && b.extraction_mode !== 'signal_first') return -1;
+      if (b.extraction_mode === 'signal_first' && a.extraction_mode !== 'signal_first') return 1;
+      return b.signal_score - a.signal_score;
+    });
 
   const exportCSV = () => {
     const headers = ['Business', 'Website', 'Phone', 'Email', 'Score', 'Confirmed Checks', 'Checkable Checks', 'Decision Maker', 'Current Process', 'After Tech', 'Outreach Status'];
@@ -933,7 +1063,14 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                     </div>
 
                     <div>
-                      <ScoreBadge score={lead.signal_score} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <ScoreBadge score={lead.signal_score} />
+                        {lead.extraction_mode === 'signal_first' ? (
+                          <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px', background: 'rgba(57,255,20,0.12)', border: '1px solid rgba(57,255,20,0.35)', color: '#39ff14', whiteSpace: 'nowrap' }}>⚡ Signal First</span>
+                        ) : (
+                          <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: 'rgba(128,128,128,0.1)', border: '1px solid rgba(128,128,128,0.2)', color: '#666', whiteSpace: 'nowrap' }}>Leads First</span>
+                        )}
+                      </div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                         {lead.confirmed_checks}/{lead.total_checkable} auto-checks confirmed
                       </div>
@@ -1132,6 +1269,7 @@ export default function ProspectIntelligence() {
           onDone={handleLeadsDone}
           existingLeads={extractedLeads}
           masterSessionId={piSessionId}
+          signalPlans={signalPlans}
         />
       )}
 
