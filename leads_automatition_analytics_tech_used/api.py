@@ -1361,6 +1361,951 @@ async def load_scan_results(technology: str, industry: str = ""):
         raise HTTPException(status_code=404, detail="No saved scan results for this technology")
     return cached
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROSPECT INTELLIGENCE V2 — 4 Sub-tab Architecture
+# Real HTTP checks, no fabricated scores.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import uuid as _uuid
+import re as _re_pi
+from bs4 import BeautifulSoup as _BS4
+
+# ── Table DDL (auto-created on startup) ──────────────────────────────────────
+
+_PI_LEADS_DDL = """
+CREATE TABLE IF NOT EXISTS pi_leads (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    business_name TEXT,
+    website TEXT,
+    phone TEXT,
+    email TEXT,
+    rating TEXT,
+    review_count TEXT,
+    category TEXT,
+    location TEXT,
+    source TEXT,
+    is_duplicate BOOLEAN DEFAULT FALSE,
+    status TEXT DEFAULT 'unanalyzed',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+"""
+
+_PI_ANALYZED_DDL = """
+CREATE TABLE IF NOT EXISTS pi_analyzed (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    business_name TEXT,
+    website TEXT,
+    phone TEXT,
+    email TEXT,
+    signal_score INTEGER DEFAULT 0,
+    confidence_rate INTEGER DEFAULT 0,
+    signal_evidence JSONB DEFAULT '{}',
+    current_process TEXT DEFAULT '',
+    after_chatbot TEXT DEFAULT '',
+    decision_maker TEXT DEFAULT '',
+    outreach_status TEXT DEFAULT 'not_contacted',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+"""
+
+def _pi_init_tables():
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        cur.execute(_PI_LEADS_DDL)
+        cur.execute(_PI_ANALYZED_DDL)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_tables] Init error: {e}")
+
+_pi_init_tables()
+
+# ── Industry → subreddits mapping ────────────────────────────────────────────
+
+_PI_REDDIT_SUBS = {
+    "restaurants": ["restaurantowners", "KitchenConfidential", "serverlife"],
+    "restaurant": ["restaurantowners", "KitchenConfidential", "serverlife"],
+    "food": ["restaurantowners", "food", "foodservice"],
+    "real estate": ["realestate", "realtors", "PropertyManagement"],
+    "fitness": ["gym", "personaltraining", "fitness"],
+    "healthcare": ["medicine", "nursing", "healthIT"],
+    "retail": ["retailhell", "smallbusiness", "ecommerce"],
+    "logistics": ["logistics", "supplychain", "trucking"],
+    "saas": ["SaaS", "startups", "ProductManagement"],
+    "education": ["Teachers", "education", "edtech"],
+    "finance": ["personalfinance", "fintech", "accounting"],
+    "marketing": ["marketing", "digital_marketing", "SEO"],
+    "ecommerce": ["ecommerce", "shopify", "Flipping"],
+    "construction": ["construction", "HomeImprovement", "smallbusiness"],
+    "legal": ["legaladvice", "law", "smallbusiness"],
+    "hospitality": ["TalesFromTheFrontDesk", "hotel", "restaurantowners"],
+    "beauty": ["Hair", "weddingplanning", "smallbusiness"],
+    "dental": ["Dentistry", "medicine", "smallbusiness"],
+}
+
+# ── Tech detection pattern dictionaries ─────────────────────────────────────
+
+_LIVE_CHAT_PATTERNS = {
+    "Intercom": ["intercom.io", "window.Intercom", "intercomSettings"],
+    "Drift": ["drift-widget", "js.driftt.com", "window.drift"],
+    "Crisp": ["client.crisp.chat", "window.$crisp"],
+    "Tawk.to": ["embed.tawk.to", "Tawk_API"],
+    "LiveChat": ["livechatinc.com", "window.__lc"],
+    "Zendesk Chat": ["static.zdassets.com", "zESettings"],
+    "Freshchat": ["wchat.freshchat.com", "window.fcWidget"],
+    "HubSpot Chat": ["js.hs-scripts.com", "HubSpotConversations"],
+    "Tidio": ["widget.tidio.co", "tidioChatCode"],
+    "Smartsupp": ["smartsuppchat.com", "smartsupp"],
+    "Olark": ["static.olark.com", "window.olark"],
+    "Pure Chat": ["purechat.com", "window.purechat"],
+}
+
+_BOOKING_PATTERNS = {
+    "Calendly": ["calendly.com", "window.Calendly"],
+    "Acuity Scheduling": ["acuityscheduling.com"],
+    "Mindbody": ["mindbodyonline.com"],
+    "OpenTable": ["opentable.com"],
+    "Booksy": ["booksy.com"],
+    "Square Appointments": ["squareup.com/appointments"],
+    "Fresha": ["fresha.com"],
+    "SimplyBook": ["simplybook.me"],
+    "Vagaro": ["vagaro.com"],
+}
+
+_CMS_PATTERNS = {
+    "WordPress": ["/wp-content/", "/wp-includes/", "wp-json"],
+    "Wix": ["wix.com", "wixsite.com", "wixstatic.com"],
+    "Squarespace": ["squarespace.com", "sqsp.net", "static.squarespace"],
+    "Shopify": ["cdn.shopify.com", "myshopify.com", "Shopify.theme"],
+    "Webflow": ["webflow.io", "webflow.com"],
+    "Weebly": ["weebly.com", "editmysite.com"],
+    "GoDaddy": ["godaddy.com/websites", "secureserver.net"],
+}
+
+# ── Core: Fetch website and detect tech signals ──────────────────────────────
+
+def _pi_fetch_and_detect(url: str) -> dict:
+    """Real HTTP fetch + HTML parsing. Returns structured findings or explicit error."""
+    out = {
+        "url": url, "fetched": False, "error": None, "status_code": None,
+        "live_chat": [], "booking": [], "contact_forms": [], "has_email_field": False,
+        "meta_pixel": False, "google_analytics": False, "cms": [],
+        "emails_found": [], "phones_found": [],
+    }
+    if not url or url in ("N/A", "None", ""):
+        out["error"] = "No website URL provided for this lead"
+        return out
+    if not url.startswith("http"):
+        url = "https://" + url
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        resp = requests.get(url, headers=headers, timeout=12, allow_redirects=True)
+        html = resp.text
+        out["fetched"] = True
+        out["status_code"] = resp.status_code
+
+        for name, patterns in _LIVE_CHAT_PATTERNS.items():
+            if any(p in html for p in patterns):
+                out["live_chat"].append(name)
+
+        for name, patterns in _BOOKING_PATTERNS.items():
+            if any(p in html for p in patterns):
+                out["booking"].append(name)
+
+        for name, patterns in _CMS_PATTERNS.items():
+            if any(p in html for p in patterns):
+                out["cms"].append(name)
+
+        out["meta_pixel"] = ("fbq(" in html or "connect.facebook.net" in html or "facebook-jssdk" in html)
+        out["google_analytics"] = any(p in html for p in ["gtag(", "ga('send", "analytics.google.com", "googletagmanager.com/gtag"])
+
+        try:
+            soup = _BS4(html, "html.parser")
+            for form in soup.find_all("form"):
+                action = form.get("action", "").lower()
+                fid = form.get("id", "").lower()
+                fcls = " ".join(form.get("class", [])).lower()
+                email_inputs = form.find_all("input", {"type": "email"})
+                ctx = action + fid + fcls
+                is_contact = any(kw in ctx for kw in ["contact", "enquir", "message", "reach", "form", "email", "touch"])
+                if email_inputs or is_contact:
+                    out["contact_forms"].append({"action": action[:80], "has_email": bool(email_inputs)})
+                    if email_inputs:
+                        out["has_email_field"] = True
+
+            raw = soup.get_text() + html
+            skip_domains = {"sentry.io", "example.com", "schema.org", "w3.org", "yourdomain", "google.com"}
+            emails = set(_re_pi.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", raw))
+            out["emails_found"] = [e for e in emails if not any(d in e for d in skip_domains)][:5]
+            phones = set(_re_pi.findall(r"(?:tel:)?((?:\+44|\+1|0)[\s\-]?(?:\d[\s\-]?){9,12})", raw))
+            out["phones_found"] = list(phones)[:3]
+        except Exception:
+            pass
+
+    except requests.exceptions.Timeout:
+        out["error"] = "Request timed out after 12 seconds"
+    except requests.exceptions.SSLError as e:
+        out["error"] = f"SSL certificate error: {str(e)[:80]}"
+    except requests.exceptions.ConnectionError as e:
+        out["error"] = f"Connection failed (site may be down): {str(e)[:80]}"
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:80]}"
+    return out
+
+def _pi_check_builtwith(domain: str) -> dict:
+    """Query BuiltWith free API if BUILTWITH_API_KEY is configured."""
+    api_key = os.getenv("BUILTWITH_API_KEY", "").strip()
+    if not api_key:
+        return {"available": False, "reason": "BUILTWITH_API_KEY not set — set it in .env to enable BuiltWith checks"}
+    try:
+        domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
+        r = requests.get(f"https://api.builtwith.com/free1/api.json?KEY={api_key}&LOOKUP={domain}", timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            techs = []
+            for result in data.get("Results", []):
+                for tech in result.get("Technologies", []):
+                    techs.append({"name": tech.get("Name"), "tag": tech.get("Tag")})
+            return {"available": True, "techs": techs, "domain": domain}
+        return {"available": False, "reason": f"BuiltWith returned HTTP {r.status_code}"}
+    except Exception as e:
+        return {"available": False, "reason": str(e)[:100]}
+
+def _pi_evaluate_signal(check: dict, website_data: dict, builtwith_data: dict) -> dict:
+    """
+    Evaluate one signal check against real fetched data.
+    Returns {confirmed, evidence, check_method, was_checkable}.
+    confirmed is 'yes' | 'no' | 'unable_to_check'.
+    """
+    sig_type = check.get("signal_type", "")
+    side = check.get("side", check.get("signal_type", ""))
+    check_name = (check.get("check_name", "") + " " + check.get("confirmed_if", "") + " " + check.get("what_to_check", "")).lower()
+
+    if not website_data.get("fetched"):
+        return {
+            "confirmed": "unable_to_check",
+            "evidence": f"Website unreachable: {website_data.get('error', 'unknown error')}",
+            "check_method": "website_html",
+            "was_checkable": False,
+        }
+
+    # Live chat
+    if sig_type == "live_chat" or any(kw in check_name for kw in ["chat", "chatbot", "live chat", "chat widget", "messaging widget"]):
+        chats = website_data.get("live_chat", [])
+        no_chat = not chats
+        return {
+            "confirmed": "yes" if no_chat else "no",
+            "evidence": ("No live chat widget detected in HTML after full page scan" if no_chat
+                         else f"Live chat widget found: {', '.join(chats)}"),
+            "check_method": "html_pattern_match",
+            "was_checkable": True,
+        }
+
+    # Booking / appointments
+    if sig_type == "booking" or any(kw in check_name for kw in ["booking", "appointment", "reservation", "scheduling", "book online"]):
+        bookings = website_data.get("booking", [])
+        no_booking = not bookings
+        return {
+            "confirmed": "yes" if no_booking else "no",
+            "evidence": ("No booking or scheduling system found in HTML" if no_booking
+                         else f"Booking system detected: {', '.join(bookings)}"),
+            "check_method": "html_pattern_match",
+            "was_checkable": True,
+        }
+
+    # Contact form
+    if sig_type == "contact_form" or any(kw in check_name for kw in ["contact form", "enquiry form", "web form", "lead form"]):
+        forms = website_data.get("contact_forms", [])
+        no_form = not forms
+        return {
+            "confirmed": "yes" if no_form else "no",
+            "evidence": ("No contact/enquiry form found on the page" if no_form
+                         else f"{len(forms)} form(s) found with email or contact fields"),
+            "check_method": "html_form_parse",
+            "was_checkable": True,
+        }
+
+    # Meta Pixel / Facebook Ads
+    if sig_type == "meta_pixel" or any(kw in check_name for kw in ["meta pixel", "facebook pixel", "fb pixel", "facebook ads", "meta ads"]):
+        has_pixel = website_data.get("meta_pixel", False)
+        return {
+            "confirmed": "yes" if not has_pixel else "no",
+            "evidence": ("No Meta/Facebook Pixel detected (no fbq function or connect.facebook.net)" if not has_pixel
+                         else "Meta Pixel found in HTML (fbq function or connect.facebook.net script)"),
+            "check_method": "html_pattern_match",
+            "was_checkable": True,
+        }
+
+    # Google Analytics
+    if sig_type == "google_analytics" or any(kw in check_name for kw in ["google analytics", "gtag", "analytics tracking"]):
+        has_ga = website_data.get("google_analytics", False)
+        return {
+            "confirmed": "yes" if not has_ga else "no",
+            "evidence": ("No Google Analytics or Tag Manager detected in HTML" if not has_ga
+                         else "Google Analytics/GTM script found in HTML"),
+            "check_method": "html_pattern_match",
+            "was_checkable": True,
+        }
+
+    # CMS
+    if sig_type == "cms" or any(kw in check_name for kw in ["wordpress", "wix", "squarespace", "shopify", "website platform", "cms"]):
+        cms = website_data.get("cms", [])
+        return {
+            "confirmed": "yes" if cms else "unable_to_check",
+            "evidence": (f"CMS detected: {', '.join(cms)}" if cms else "No recognisable CMS fingerprint in HTML — may be custom-built or headless"),
+            "check_method": "html_pattern_match",
+            "was_checkable": True,
+        }
+
+    # CRM via BuiltWith
+    if sig_type == "crm" or any(kw in check_name for kw in ["crm", "salesforce", "hubspot", "pipedrive", "zoho", "marketing automation"]):
+        if builtwith_data.get("available"):
+            crm_kws = ["crm", "salesforce", "hubspot", "pipedrive", "zoho", "mailchimp", "klaviyo", "activecampaign"]
+            found = [t["name"] for t in builtwith_data.get("techs", [])
+                     if any(k in (t.get("name", "") + t.get("tag", "")).lower() for k in crm_kws)]
+            no_crm = not found
+            return {
+                "confirmed": "yes" if no_crm else "no",
+                "evidence": ("No CRM or marketing automation tools found via BuiltWith scan" if no_crm
+                             else f"CRM tools detected via BuiltWith: {', '.join(found)}"),
+                "check_method": "builtwith_api",
+                "was_checkable": True,
+            }
+        return {
+            "confirmed": "unable_to_check",
+            "evidence": "BuiltWith API key not configured — set BUILTWITH_API_KEY in .env to enable CRM detection",
+            "check_method": "builtwith_api",
+            "was_checkable": False,
+        }
+
+    # Manual signals (review checks, LinkedIn, Google News, etc.)
+    where = check.get("where_to_look", "")
+    what = check.get("what_to_search", "")
+    return {
+        "confirmed": "unable_to_check",
+        "evidence": (f"Manual check required — go to: {where}. Search: {what}. "
+                     f"Confirmed if: {check.get('confirmed_if', 'see signal definition')}"),
+        "check_method": "manual",
+        "was_checkable": False,
+    }
+
+# ── Yellow Pages sync scraper ────────────────────────────────────────────────
+
+def _pi_yp_sync(query: str, location: str, max_results: int = 10) -> list:
+    leads = []
+    try:
+        url = f"https://www.yellowpages.com/search?search_terms={urllib.parse.quote_plus(query)}&geo_location_terms={urllib.parse.quote_plus(location)}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        soup = _BS4(resp.text, "html.parser")
+        for listing in soup.find_all("div", class_="srp-listing")[:max_results]:
+            name_el = listing.find("a", class_="business-name")
+            phone_el = listing.find("div", class_="phones")
+            web_el = listing.find("a", class_="track-visit-website")
+            cat_el = listing.find("div", class_="categories")
+            if name_el:
+                leads.append({
+                    "business_name": name_el.get_text(strip=True),
+                    "phone": phone_el.get_text(strip=True) if phone_el else "",
+                    "website": web_el.get("href", "") if web_el else "",
+                    "email": "", "rating": "", "review_count": "",
+                    "category": cat_el.get_text(strip=True) if cat_el else query,
+                    "location": location, "source": "Yellow Pages",
+                })
+    except Exception as e:
+        print(f"[yellow_pages] {e}")
+    return leads
+
+# ── Companies House UK (free API, needs key) ─────────────────────────────────
+
+def _pi_companies_house_sync(industry: str, location: str, max_results: int = 10) -> list:
+    api_key = os.getenv("COMPANIES_HOUSE_API_KEY", "").strip()
+    if not api_key:
+        return []
+    leads = []
+    try:
+        q = urllib.parse.quote(f"{industry} {location}")
+        url = f"https://api.company-information.service.gov.uk/search/companies?q={q}&items_per_page={max_results}"
+        resp = requests.get(url, auth=(api_key, ""), timeout=10)
+        if resp.status_code == 200:
+            for item in resp.json().get("items", []):
+                leads.append({
+                    "business_name": item.get("title", ""),
+                    "website": "", "phone": "", "email": "", "rating": "", "review_count": "",
+                    "category": item.get("description", industry),
+                    "location": item.get("address", {}).get("locality", location),
+                    "source": "Companies House UK",
+                })
+    except Exception as e:
+        print(f"[companies_house] {e}")
+    return leads
+
+# ── PI V2 request models ──────────────────────────────────────────────────────
+
+class PIV2PainPointsRequest(BaseModel):
+    technology: str
+    industry: str
+    departments: list = []
+    session_id: str = ""
+
+class PIV2SignalPlansRequest(BaseModel):
+    pain_points: list
+    industry: str
+    technology: str = ""
+    session_id: str = ""
+
+class PIV2ExtractLeadsRequest(BaseModel):
+    industry: str
+    location: str
+    num_leads: int = 20
+    sources: List[str] = ["Google Maps"]
+    session_id: str = ""
+
+class PIV2AnalyzeRequest(BaseModel):
+    leads: list
+    signal_plans: list
+    technology: str = ""
+    industry: str = ""
+    session_id: str = ""
+
+# ── Sub-tab 1: Pain Points ───────────────────────────────────────────────────
+
+@app.post("/prospect-intel/v2/pain-points")
+async def pi_v2_pain_points(request: PIV2PainPointsRequest):
+    """Generate 5-8 pain points using LLM + live web research (Reddit, Indeed)."""
+    from market_research import nvidia_chat
+    if not request.technology.strip():
+        raise HTTPException(400, "Technology keyword is required")
+
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    reddit_context = ""
+    indeed_context = ""
+
+    # 1. Reddit research via Arctic Shift (no auth needed)
+    try:
+        ind_lower = (request.industry or "").lower()
+        subs = _PI_REDDIT_SUBS.get(ind_lower, ["entrepreneur", "smallbusiness", "business"])
+        query_enc = urllib.parse.quote(f"{request.technology} {request.industry} problems frustrating")
+        for sub in subs[:2]:
+            try:
+                r = requests.get(
+                    f"https://arctic-shift.photon-reddit.com/api/posts/search?q={query_enc}&subreddit={sub}&limit=5&sort=score",
+                    timeout=8
+                )
+                if r.status_code == 200:
+                    posts = r.json().get("data", [])
+                    for p in posts[:3]:
+                        reddit_context += f"[r/{sub}] {p.get('title', '')}: {p.get('selftext', '')[:250]}\n"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 2. Indeed job postings (RSS, no auth)
+    try:
+        import feedparser
+        q_enc = urllib.parse.quote_plus(f"{request.technology} {request.industry}")
+        r = requests.get(f"https://www.indeed.com/rss?q={q_enc}&limit=5",
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code == 200:
+            feed = feedparser.parse(r.content)
+            for entry in feed.entries[:4]:
+                indeed_context += f"[Indeed] {entry.get('title', '')}: {entry.get('summary', '')[:200]}\n"
+    except Exception:
+        pass
+
+    web_block = ""
+    if reddit_context or indeed_context:
+        web_block = f"\nLIVE WEB RESEARCH (use to ground pain points in real evidence):\n{reddit_context}{indeed_context}\n"
+
+    dept_str = ", ".join(request.departments) if request.departments else "all relevant departments"
+    prompt = f"""You are a senior B2B sales intelligence analyst.
+Technology being sold: {request.technology}
+Target industry: {request.industry or "general businesses"}
+Department focus: {dept_str}
+{web_block}
+Generate exactly 6 pain points that "{request.technology}" DIRECTLY solves in the {request.industry or "target"} industry.
+Each pain point must be specific to this industry — no generic business language.
+
+Return ONLY a valid JSON array (no markdown fences):
+[
+  {{
+    "title": "Short pain name max 6 words",
+    "frequency": "very common",
+    "description": "2-3 sentences in {request.industry}-specific terms. Vivid and concrete.",
+    "revenue_impact": "Specific dollar figures with logic. E.g. '$2,400/month lost because average ticket = $80 × 30 missed calls'",
+    "why_tech_solves": "One sentence: exactly how {request.technology} eliminates this pain",
+    "job_titles": ["Real Job Title 1", "Real Job Title 2"],
+    "web_evidence": "Cite real Reddit/Indeed evidence if available, else leave blank"
+  }}
+]
+Rules: frequency = very common | common | occasional. Revenue impact must include dollar amounts AND calculation logic. Job titles must actually exist in {request.industry} industry."""
+
+    try:
+        raw = nvidia_chat(prompt, max_tokens=3000)
+        clean = raw.strip()
+        clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
+        clean = _re_pi.sub(r"\s*```$", "", clean)
+        pain_points = json.loads(clean)
+        if isinstance(pain_points, dict):
+            for k in ("pain_points", "points", "results"):
+                if k in pain_points and isinstance(pain_points[k], list):
+                    pain_points = pain_points[k]
+                    break
+        if not isinstance(pain_points, list):
+            raise ValueError("LLM response was not a JSON array")
+
+        db_manager.save_market_result(
+            "pi_pain_v2", request.technology,
+            f"pi_pain_v2:{request.technology.lower().strip()}:{(request.industry or '').lower().strip()}",
+            {"pain_points": pain_points, "session_id": session_id,
+             "technology": request.technology, "industry": request.industry}
+        )
+        return {
+            "session_id": session_id,
+            "technology": request.technology,
+            "industry": request.industry,
+            "pain_points": pain_points,
+            "web_research_used": bool(reddit_context or indeed_context),
+            "reddit_posts_found": reddit_context.count("[r/"),
+            "indeed_jobs_found": indeed_context.count("[Indeed]"),
+        }
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"LLM returned invalid JSON: {str(e)[:200]}")
+    except Exception as e:
+        raise HTTPException(500, f"Pain points generation failed: {str(e)}")
+
+# ── Sub-tab 2: Signal Plans ──────────────────────────────────────────────────
+
+@app.post("/prospect-intel/v2/signal-plans")
+async def pi_v2_signal_plans(request: PIV2SignalPlansRequest):
+    """Generate per-pain-point signal detection plans with industry-appropriate sources."""
+    from market_research import nvidia_chat
+    if not request.pain_points:
+        raise HTTPException(400, "Pain points list is required")
+
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    industry = request.industry or "general"
+    b2b_kws = ["saas", "software", "logistics", "manufacturing", "construction", "legal", "accounting", "finance", "b2b", "recruitment"]
+    is_b2b = any(k in industry.lower() for k in b2b_kws)
+
+    if is_b2b:
+        allowed = "LinkedIn (public job search), Indeed (public listings), Glassdoor (public), BuiltWith.com, Google News, Trustpilot, G2, Capterra, Business website, Google Search snippet"
+        forbidden = "Facebook, Instagram, Google Reviews, Yelp, TripAdvisor"
+    else:
+        allowed = "Google Maps, Google Reviews, Google Search snippet, Trustpilot, Business website, Yelp, Yellow Pages, Bark.com, Facebook public page (via Google Search snippet only)"
+        forbidden = "G2, Capterra, LinkedIn Jobs (B2B platforms), ThomasNet"
+
+    pain_block = "\n".join([f"{i+1}. {pp.get('title','')}: {pp.get('description','')[:200]}"
+                             for i, pp in enumerate(request.pain_points)])
+    prompt = f"""You are a B2B signal intelligence analyst for the {industry} industry.
+Technology: {request.technology or "the product"}
+
+PAIN POINTS:
+{pain_block}
+
+For EACH pain point, create a signal detection plan telling a salesperson EXACTLY where to look and what they will find.
+
+ALLOWED SOURCES for {industry}: {allowed}
+FORBIDDEN SOURCES for {industry}: {forbidden}
+
+Return ONLY a valid JSON array:
+[
+  {{
+    "pain_point_title": "exact title from list above",
+    "decision_maker": {{
+      "job_title": "The specific contact when this signal fires",
+      "why": "Why they own this problem in {industry}"
+    }},
+    "checks": [
+      {{
+        "check_name": "What you are checking",
+        "where_to_look": "Exact URL format or tool",
+        "what_to_search": "Exact search term or field name",
+        "what_to_check": "Specific HTML element, page section, or visible field",
+        "confirmed_if": "Boolean condition — specific and measurable",
+        "difficulty": "easy",
+        "signal_type": "live_chat",
+        "auto_checkable": true
+      }}
+    ]
+  }}
+]
+
+signal_type MUST be ONE of: live_chat | booking | contact_form | meta_pixel | google_analytics | cms | crm | manual_google_search | manual_linkedin | manual_review_check | manual_indeed
+auto_checkable: true ONLY for signal_type in [live_chat, booking, contact_form, meta_pixel, google_analytics, cms]
+Generate 4-6 checks per pain point. At least 2 must be auto_checkable: true."""
+
+    try:
+        raw = nvidia_chat(prompt, max_tokens=4000)
+        clean = raw.strip()
+        clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
+        clean = _re_pi.sub(r"\s*```$", "", clean)
+        signal_plans = json.loads(clean)
+        if not isinstance(signal_plans, list):
+            raise ValueError("Expected JSON array")
+        db_manager.save_market_result(
+            "pi_signals_v2", industry,
+            f"pi_signals_v2:{industry.lower()}:{session_id}",
+            {"signal_plans": signal_plans, "session_id": session_id, "industry": industry}
+        )
+        return {"session_id": session_id, "signal_plans": signal_plans}
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"Failed to parse signal plans: {str(e)[:200]}")
+    except Exception as e:
+        raise HTTPException(500, f"Signal plan generation failed: {str(e)}")
+
+# ── Sub-tab 3: Lead Extraction ───────────────────────────────────────────────
+
+_pi_v2_extract_status: dict = {}  # session_id -> {done, progress, error, leads}
+
+@app.post("/prospect-intel/v2/extract-leads")
+async def pi_v2_extract_leads(request: PIV2ExtractLeadsRequest, background_tasks: BackgroundTasks):
+    """Start lead extraction in background. Poll /prospect-intel/v2/extract-leads/status/{session_id}."""
+    if not request.industry or not request.location:
+        raise HTTPException(400, "Industry and location are required")
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_extract_status[session_id] = {"done": False, "progress": "Starting...", "error": None, "leads": [], "source_results": {}}
+    background_tasks.add_task(_pi_extract_leads_task, request, session_id)
+    return {"session_id": session_id, "message": "Lead extraction started"}
+
+async def _pi_extract_leads_task(request: PIV2ExtractLeadsRequest, session_id: str):
+    def log(msg):
+        if session_id in _pi_v2_extract_status:
+            _pi_v2_extract_status[session_id]["progress"] = msg
+
+    all_leads = []
+    source_results = {}
+    per_source = max(5, request.num_leads // max(len(request.sources), 1))
+
+    for source in request.sources:
+        log(f"Scraping {source}...")
+        if source == "Google Maps":
+            try:
+                q = urllib.parse.quote_plus(f"{request.industry} in {request.location}")
+                maps_url = f"https://www.google.com/maps/search/{q}"
+                results = await scrape_google_maps(maps_url, per_source + 5)
+                normalized = [{
+                    "business_name": r.get("Business Name", ""),
+                    "website": r.get("Website", ""),
+                    "phone": r.get("Phone", ""),
+                    "email": r.get("Email", ""),
+                    "rating": str(r.get("Rating", "")),
+                    "review_count": str(r.get("Reviews", "")),
+                    "category": r.get("Industry", request.industry),
+                    "location": request.location,
+                    "source": "Google Maps",
+                } for r in results]
+                all_leads.extend(normalized)
+                source_results["Google Maps"] = {"count": len(normalized), "status": "success"}
+            except Exception as e:
+                source_results["Google Maps"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+
+        elif source == "Yellow Pages":
+            try:
+                loop = asyncio.get_event_loop()
+                yp = await loop.run_in_executor(None, lambda: _pi_yp_sync(request.industry, request.location, per_source))
+                all_leads.extend(yp)
+                source_results["Yellow Pages"] = {"count": len(yp), "status": "success"}
+            except Exception as e:
+                source_results["Yellow Pages"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+
+        elif source == "Companies House UK":
+            try:
+                loop = asyncio.get_event_loop()
+                ch = await loop.run_in_executor(None, lambda: _pi_companies_house_sync(request.industry, request.location, per_source))
+                if ch:
+                    all_leads.extend(ch)
+                    source_results["Companies House UK"] = {"count": len(ch), "status": "success"}
+                else:
+                    source_results["Companies House UK"] = {"count": 0, "status": "not_configured: set COMPANIES_HOUSE_API_KEY in .env"}
+            except Exception as e:
+                source_results["Companies House UK"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+
+        else:
+            source_results[source] = {"count": 0, "status": "not_automated: requires authentication or browser automation not yet implemented"}
+
+    # Attempt email extraction for leads missing an email
+    log(f"Hunting emails for {len(all_leads)} leads...")
+    for lead in all_leads:
+        if not lead.get("email") and lead.get("website") and lead["website"] not in ("N/A", ""):
+            try:
+                wd = _pi_fetch_and_detect(lead["website"])
+                if wd.get("emails_found"):
+                    lead["email"] = wd["emails_found"][0]
+                if not lead.get("email"):
+                    for path in ["/contact", "/contact-us", "/about", "/about-us"]:
+                        try:
+                            url_try = lead["website"].rstrip("/") + path
+                            r = requests.get(url_try, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                            if r.status_code == 200:
+                                found = _re_pi.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", r.text)
+                                skip = {"sentry.io", "example.com", "schema.org", "w3.org"}
+                                valid = [e for e in found if not any(d in e for d in skip)]
+                                if valid:
+                                    lead["email"] = valid[0]
+                                    break
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    # Deduplicate by phone AND website domain — flag, don't delete
+    log("Deduplicating leads...")
+    seen_phones: set = set()
+    seen_domains: set = set()
+    for lead in all_leads:
+        phone_norm = _re_pi.sub(r"[\s\-\(\)\+]", "", lead.get("phone", ""))
+        raw_web = lead.get("website", "")
+        domain = raw_web.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].lower()
+
+        is_dup = (bool(phone_norm) and phone_norm in seen_phones) or (bool(domain) and domain in seen_domains)
+        lead["is_duplicate"] = is_dup
+        lead["status"] = "unanalyzed"
+        lead["session_id"] = session_id
+
+        if phone_norm:
+            seen_phones.add(phone_norm)
+        if domain:
+            seen_domains.add(domain)
+
+    # Save to pi_leads table
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        for lead in all_leads:
+            cur.execute("""
+                INSERT INTO pi_leads (session_id, business_name, website, phone, email, rating,
+                    review_count, category, location, source, is_duplicate, status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (session_id, lead.get("business_name",""), lead.get("website",""),
+                  lead.get("phone",""), lead.get("email",""), lead.get("rating",""),
+                  lead.get("review_count",""), lead.get("category",""), lead.get("location",""),
+                  lead.get("source",""), lead.get("is_duplicate", False), "unanalyzed"))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_leads_save] {e}")
+
+    _pi_v2_extract_status[session_id] = {
+        "done": True, "progress": f"Done — {len(all_leads)} leads collected",
+        "error": None, "leads": all_leads, "source_results": source_results,
+        "unique": len([l for l in all_leads if not l.get("is_duplicate")]),
+        "duplicates": len([l for l in all_leads if l.get("is_duplicate")]),
+    }
+
+@app.get("/prospect-intel/v2/extract-leads/status/{session_id}")
+async def pi_v2_extract_status(session_id: str):
+    st = _pi_v2_extract_status.get(session_id)
+    if not st:
+        raise HTTPException(404, "Session not found")
+    return st
+
+# ── Sub-tab 4: Signal Analyzer ───────────────────────────────────────────────
+
+_pi_v2_analyze_status: dict = {}  # session_id -> {done, progress, current, total, leads}
+
+@app.post("/prospect-intel/v2/analyze")
+async def pi_v2_analyze(request: PIV2AnalyzeRequest, background_tasks: BackgroundTasks):
+    """Start signal analysis in background. Poll /prospect-intel/v2/analyze/status/{session_id}."""
+    if not request.leads:
+        raise HTTPException(400, "No leads to analyze")
+    if not request.signal_plans:
+        raise HTTPException(400, "No signal plans provided")
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_analyze_status[session_id] = {
+        "done": False, "progress": "Starting...", "current": 0,
+        "total": len(request.leads), "leads": [], "error": None,
+    }
+    background_tasks.add_task(_pi_analyze_task, request, session_id)
+    return {"session_id": session_id, "message": "Signal analysis started", "total": len(request.leads)}
+
+async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
+    from market_research import nvidia_chat
+
+    def log(msg, current=None, total=None):
+        entry = _pi_v2_analyze_status.get(session_id, {})
+        entry["progress"] = msg
+        if current is not None:
+            entry["current"] = current
+        if total is not None:
+            entry["total"] = total
+        _pi_v2_analyze_status[session_id] = entry
+
+    analyzed = []
+    total = len(request.leads)
+
+    for idx, lead in enumerate(request.leads, 1):
+        website = lead.get("website") or lead.get("Website") or ""
+        name = lead.get("business_name") or lead.get("Business Name") or ""
+        log(f"[{idx}/{total}] Checking {name or website or 'unknown'}...", current=idx, total=total)
+
+        # Real HTTP fetch
+        website_data = _pi_fetch_and_detect(website) if (website and website not in ("N/A", "")) else {"fetched": False, "error": "No website"}
+
+        # BuiltWith check
+        builtwith_data = {}
+        if website and website not in ("N/A", ""):
+            domain = website.replace("https://", "").replace("http://", "").split("/")[0]
+            builtwith_data = _pi_check_builtwith(domain)
+
+        # Evaluate every check from every signal plan
+        all_checks = []
+        confirmed_count = 0
+        checkable_count = 0
+
+        for plan in request.signal_plans:
+            pain_title = plan.get("pain_point_title") or plan.get("pain_point", "")
+            dm = plan.get("decision_maker", {})
+            for chk in plan.get("checks", []):
+                result = _pi_evaluate_signal(chk, website_data, builtwith_data)
+                all_checks.append({
+                    "pain_point": pain_title,
+                    "check_name": chk.get("check_name", ""),
+                    "where_to_look": chk.get("where_to_look", ""),
+                    "what_to_search": chk.get("what_to_search", ""),
+                    "confirmed_if": chk.get("confirmed_if", ""),
+                    "confirmed": result["confirmed"],
+                    "evidence": result["evidence"],
+                    "check_method": result["check_method"],
+                    "was_checkable": result["was_checkable"],
+                    "difficulty": chk.get("difficulty", ""),
+                    "signal_type": chk.get("signal_type", ""),
+                    "decision_maker": dm,
+                })
+                if result["was_checkable"]:
+                    checkable_count += 1
+                    if result["confirmed"] == "yes":
+                        confirmed_count += 1
+
+        confidence_rate = round(confirmed_count / checkable_count * 100) if checkable_count > 0 else 0
+
+        # LLM: current_process and after_chatbot based on REAL evidence
+        current_process = ""
+        after_tech = ""
+        try:
+            confirmed_evidence = [c for c in all_checks if c["confirmed"] == "yes"]
+            if confirmed_evidence:
+                ev_block = "\n".join([f"- {c['check_name']}: {c['evidence']}" for c in confirmed_evidence[:5]])
+                lm_resp = nvidia_chat(
+                    f"Business: {name} ({request.industry})\nTechnology: {request.technology or 'AI automation'}\nConfirmed signals:\n{ev_block}\n\nIn 1 sentence each:\nCURRENT: What is this business doing TODAY to handle this (specific, not generic)\nAFTER: What changes immediately when they implement {request.technology or 'the technology'}",
+                    max_tokens=150
+                )
+                m1 = _re_pi.search(r"CURRENT:\s*(.+)", lm_resp)
+                m2 = _re_pi.search(r"AFTER:\s*(.+)", lm_resp)
+                if m1:
+                    current_process = m1.group(1).strip()
+                if m2:
+                    after_tech = m2.group(1).strip()
+        except Exception:
+            pass
+
+        # Decision maker: from first plan that has confirmed signals
+        dm_contact = ""
+        for c in all_checks:
+            if c["confirmed"] == "yes" and c.get("decision_maker", {}).get("job_title"):
+                dm_contact = c["decision_maker"]["job_title"]
+                break
+        if not dm_contact and request.signal_plans:
+            dm_contact = request.signal_plans[0].get("decision_maker", {}).get("job_title", "")
+
+        email_val = (lead.get("email") or lead.get("Email") or
+                     (website_data.get("emails_found", [None])[0] if website_data.get("emails_found") else ""))
+
+        analyzed_lead = {
+            "business_name": name,
+            "website": website,
+            "phone": lead.get("phone") or lead.get("Phone", ""),
+            "email": email_val,
+            "rating": lead.get("rating") or lead.get("Rating", ""),
+            "review_count": lead.get("review_count") or lead.get("Reviews", ""),
+            "category": lead.get("category") or lead.get("Category") or lead.get("Industry", ""),
+            "location": lead.get("location") or lead.get("City", ""),
+            "signal_score": confidence_rate,
+            "confidence_rate": confidence_rate,
+            "confirmed_checks": confirmed_count,
+            "total_checkable": checkable_count,
+            "total_checks": len(all_checks),
+            "signal_evidence": all_checks,
+            "current_process": current_process,
+            "after_chatbot": after_tech,
+            "decision_maker": dm_contact,
+            "outreach_status": "not_contacted",
+            "website_fetch_status": ("success" if website_data.get("fetched") else website_data.get("error", "not checked")),
+            "tech_detected": {
+                "live_chat": website_data.get("live_chat", []),
+                "booking": website_data.get("booking", []),
+                "cms": website_data.get("cms", []),
+                "meta_pixel": website_data.get("meta_pixel", False),
+                "google_analytics": website_data.get("google_analytics", False),
+            },
+        }
+        analyzed.append(analyzed_lead)
+
+        # Save incrementally to DB
+        try:
+            conn = db_manager.get_pg_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO pi_analyzed (session_id, business_name, website, phone, email,
+                    signal_score, confidence_rate, signal_evidence, current_process, after_chatbot, decision_maker)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+            """, (session_id, analyzed_lead["business_name"], analyzed_lead["website"],
+                  analyzed_lead["phone"], analyzed_lead["email"],
+                  analyzed_lead["signal_score"], analyzed_lead["confidence_rate"],
+                  json.dumps(analyzed_lead["signal_evidence"]),
+                  analyzed_lead["current_process"], analyzed_lead["after_chatbot"],
+                  analyzed_lead["decision_maker"]))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[pi_analyzed_save] {e}")
+
+        _pi_v2_analyze_status[session_id]["leads"] = analyzed
+
+    _pi_v2_analyze_status[session_id]["done"] = True
+    _pi_v2_analyze_status[session_id]["progress"] = f"Complete — {len(analyzed)} leads analyzed"
+
+@app.get("/prospect-intel/v2/analyze/status/{session_id}")
+async def pi_v2_analyze_status_check(session_id: str):
+    st = _pi_v2_analyze_status.get(session_id)
+    if not st:
+        raise HTTPException(404, "Session not found")
+    return st
+
+@app.get("/prospect-intel/v2/leads/{session_id}")
+async def pi_v2_get_leads(session_id: str):
+    try:
+        import psycopg2.extras
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM pi_leads WHERE session_id = %s ORDER BY id DESC", (session_id,))
+        leads = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return {"session_id": session_id, "leads": leads}
+    except Exception as e:
+        raise HTTPException(500, f"Error fetching leads: {str(e)}")
+
+@app.get("/prospect-intel/v2/analyzed/{session_id}")
+async def pi_v2_get_analyzed(session_id: str):
+    try:
+        import psycopg2.extras
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM pi_analyzed WHERE session_id = %s ORDER BY signal_score DESC", (session_id,))
+        results = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return {"session_id": session_id, "results": results}
+    except Exception as e:
+        raise HTTPException(500, f"Error fetching analyzed results: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     db_manager.init_db()

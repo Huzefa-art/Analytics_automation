@@ -1,1248 +1,979 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Search, Zap, AlertCircle, Shield, Eye, CheckCircle, MapPin,
-  ChevronDown, ChevronUp, ChevronRight, Loader, RefreshCw, Download, Send,
-  TrendingUp, Users, Target, Globe, Activity, Filter, Mail, Phone, LinkIcon,
-  BarChart2, Layers, ExternalLink, Play, Database
+  Zap, AlertCircle, Shield, Target, BarChart2, Search, Globe,
+  Users, CheckCircle, XCircle, HelpCircle, Loader, Download,
+  ChevronDown, ChevronUp, ChevronRight, RefreshCw, Play, Mail,
+  Phone, LinkIcon, ExternalLink, Filter, TrendingUp, Activity,
+  MapPin, Star, Copy
 } from 'lucide-react';
 
 const API = '/api';
 
-// ── Department options ────────────────────────────────────────────────────────
-const DEFAULT_DEPT_OPTIONS = [
-  { slug: 'logistics_supply_chain', label: 'Core Logistics & Supply Chain', sub: 'Logistics Managers, Supply Chain Directors', color: '#60a5fa' },
-  { slug: 'warehousing_inventory', label: 'Warehousing & Inventory', sub: 'Warehouse Managers, Inventory Controllers', color: '#fbbf24' },
-  { slug: 'transport_dispatch', label: 'Transport & Dispatch', sub: 'Fleet Managers, Dispatchers', color: '#34d399' },
-  { slug: 'procurement_sourcing', label: 'Procurement & Sourcing', sub: 'Procurement Managers, Sourcing Analysts', color: '#a78bfa' },
-  { slug: 'cross_functional', label: 'Cross-Functional Support', sub: 'IT, Finance, HR, Operations', color: '#f87171' },
-  { slug: 'external_stakeholders', label: 'External Stakeholders', sub: 'Customers, Vendors, Carriers, Partners', color: '#fb923c' },
-];
-
-function deptColor(slug, options = DEFAULT_DEPT_OPTIONS) {
-  return options.find(d => d.slug === slug)?.color || '#888';
+// ── Score colours ─────────────────────────────────────────────────────────────
+function scoreColor(n) {
+  if (n >= 70) return { text: '#ff5020', bg: 'rgba(255,80,32,0.12)', border: 'rgba(255,80,32,0.35)', label: 'HOT' };
+  if (n >= 40) return { text: '#ffdf00', bg: 'rgba(255,223,0,0.1)', border: 'rgba(255,223,0,0.3)', label: 'WARM' };
+  if (n > 0)   return { text: '#60a5fa', bg: 'rgba(96,165,250,0.1)', border: 'rgba(96,165,250,0.25)', label: 'COLD' };
+  return { text: '#555', bg: 'rgba(80,80,80,0.1)', border: 'rgba(80,80,80,0.2)', label: 'N/A' };
 }
 
-function DeptBadge({ dept, options = DEFAULT_DEPT_OPTIONS, size = 'sm' }) {
-  const d = options.find(o => o.slug === dept || o.label === dept);
-  const color = d?.color || '#888';
-  const label = d?.label || dept;
+function ScoreBadge({ score }) {
+  const c = scoreColor(score);
   return (
-    <span style={{
-      background: `${color}15`, border: `1px solid ${color}44`,
-      color, fontSize: size === 'xs' ? '0.6rem' : '0.68rem', fontWeight: 700,
-      padding: size === 'xs' ? '1px 6px' : '2px 8px', borderRadius: '20px',
-      whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px'
-    }}>
-      <Users size={size === 'xs' ? 9 : 10} /> {label}
-    </span>
-  );
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-function getConfColor(score) {
-  if (score >= 81) return { bg: 'rgba(255,80,0,0.15)', border: 'rgba(255,80,0,0.4)', text: '#ff6020', label: 'HOT' };
-  if (score >= 61) return { bg: 'rgba(40,167,69,0.12)', border: 'rgba(40,167,69,0.35)', text: '#39ff14', label: 'STRONG' };
-  if (score >= 31) return { bg: 'rgba(255,193,7,0.12)', border: 'rgba(255,193,7,0.35)', text: '#ffdf00', label: 'WEAK' };
-  return { bg: 'rgba(120,120,120,0.1)', border: 'rgba(120,120,120,0.3)', text: '#888', label: 'SKIP' };
-}
-
-function ConfBadge({ score }) {
-  const c = getConfColor(score);
-  return (
-    <span style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px', whiteSpace: 'nowrap' }}>
+    <span style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: '0.68rem', fontWeight: 800, padding: '2px 9px', borderRadius: '20px', whiteSpace: 'nowrap' }}>
       {score}% · {c.label}
     </span>
   );
 }
 
-function StatusBadge({ status }) {
-  const map = {
-    generated: { bg: 'rgba(40,167,69,0.15)', color: '#39ff14', border: 'rgba(40,167,69,0.3)', label: '✓ Generated' },
-    pending: { bg: 'rgba(255,193,7,0.15)', color: '#ffdf00', border: 'rgba(255,193,7,0.3)', label: '⟳ Pending' },
-    loading: { bg: 'rgba(96,165,250,0.15)', color: '#60a5fa', border: 'rgba(96,165,250,0.3)', label: '◌ Loading…' },
-    none: { bg: 'rgba(120,120,120,0.1)', color: '#666', border: 'rgba(120,120,120,0.2)', label: '— Not started' },
-  };
-  const s = map[status] || map.none;
-  return (
-    <span style={{ background: s.bg, border: `1px solid ${s.border}`, color: s.color, fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-      {s.label}
-    </span>
-  );
-}
-
 function FreqBadge({ freq }) {
-  const map = {
-    'very common': '#ff6b6b',
-    'common': '#ffdf00',
-    'occasional': '#a78bfa',
-  };
-  const color = map[(freq || '').toLowerCase()] || '#888';
+  const colors = { 'very common': '#ff6b6b', common: '#ffdf00', occasional: '#a78bfa' };
+  const c = colors[(freq || '').toLowerCase()] || '#888';
   return (
-    <span style={{ background: `${color}18`, border: `1px solid ${color}44`, color, fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', textTransform: 'uppercase' }}>
+    <span style={{ background: `${c}18`, border: `1px solid ${c}44`, color: c, fontSize: '0.62rem', fontWeight: 700, padding: '2px 7px', borderRadius: '20px', textTransform: 'uppercase' }}>
       {freq}
     </span>
   );
 }
 
-function AccordionSection({ title, icon: Icon, iconColor = 'var(--gold-primary)', status, children, defaultOpen = true, action }) {
-  const [open, setOpen] = useState(defaultOpen);
+function ConfirmBadge({ confirmed }) {
+  if (confirmed === 'yes') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#39ff14', fontSize: '0.7rem', fontWeight: 700 }}><CheckCircle size={11} /> Confirmed</span>;
+  if (confirmed === 'no') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#ff6b6b', fontSize: '0.7rem', fontWeight: 700 }}><XCircle size={11} /> Not confirmed</span>;
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#888', fontSize: '0.7rem', fontWeight: 700 }}><HelpCircle size={11} /> Unable to check</span>;
+}
+
+// ── Sub-tab bar ───────────────────────────────────────────────────────────────
+const TABS = [
+  { icon: AlertCircle, label: 'Pain Points', color: '#ff6b6b' },
+  { icon: Shield, label: 'Signal Plans', color: '#a78bfa' },
+  { icon: Target, label: 'Lead Extraction', color: '#39ff14' },
+  { icon: BarChart2, label: 'Signal Analyzer', color: 'var(--gold-primary)' },
+];
+
+function SubTabBar({ active, setActive, readiness }) {
   return (
-    <div className="card pi-accordion" style={{ borderColor: `${iconColor}33` }}>
-      <div onClick={() => setOpen(o => !o)} className="pi-accordion-header">
-        <div className="pi-accordion-title">
-          <Icon size={18} style={{ color: iconColor, flexShrink: 0 }} />
-          <h3>{title}</h3>
-          <StatusBadge status={status} />
-        </div>
-        <div className="pi-accordion-actions">
-          {action}
-          {open ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
-        </div>
-      </div>
-      {open && <div className="pi-accordion-body">{children}</div>}
+    <div style={{ display: 'flex', gap: '4px', marginBottom: '1.5rem', background: 'rgba(0,0,0,0.25)', padding: '5px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+      {TABS.map((t, i) => {
+        const Icon = t.icon;
+        const isActive = active === i;
+        const ready = readiness[i];
+        return (
+          <button key={i} onClick={() => setActive(i)} style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+            padding: '0.65rem 0.5rem', borderRadius: '9px', border: 'none', cursor: 'pointer',
+            background: isActive ? `${t.color}18` : 'transparent',
+            borderTop: isActive ? `2px solid ${t.color}` : '2px solid transparent',
+            color: isActive ? t.color : 'var(--text-muted)',
+            fontSize: '0.78rem', fontWeight: isActive ? 700 : 400,
+            transition: 'all 0.15s ease', position: 'relative',
+          }}>
+            <Icon size={14} />
+            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
+            {ready && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#39ff14', position: 'absolute', top: '5px', right: '5px' }} />}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-// ── compute confidence for a lead against all signal blocks ───────────────────
-function scoreLeadAgainstSignals(lead, signalBlocks) {
-  const results = {};
-  let totalScore = 0;
-  let blockCount = 0;
-
-  for (const block of (signalBlocks || [])) {
-    const confirmed = [], unconfirmed = [];
-    let blockScore = 0;
-
-    for (const sig of (block.signals || [])) {
-      const weight = sig.weight || 20; // fallback weight
-      let ok = false;
-      const st = (sig.signal || '').toLowerCase();
-      const st_desc = (sig.confirmed_if || '').toLowerCase();
-      const side = sig.side;
-
-      // Normalize lead fields
-      const chat = lead['Live Chat / Support'] || lead['live_chat'] || '';
-      const crm = lead['CRM / Marketing Automation'] || lead['crm'] || '';
-      const pay = lead['Payments'] || lead['payments'] || '';
-      const ads = lead['Ads Active'] || lead['ads_active'] || '';
-      const cms = lead['CMS'] || lead['cms'] || '';
-      const web = lead['Website'] || lead['website'] || '';
-      const rating = parseFloat(lead['Rating'] || lead['rating'] || '5');
-      const reviews = parseInt(lead['Reviews'] || lead['reviews'] || '0');
-      const email = lead['Email'] || lead['email'] || '';
-      const phone = lead['Phone'] || lead['phone'] || '';
-
-      const noVal = v => !v || v === 'N/A' || v === '[]' || v === '';
-
-      if (side === 'solution_gap') {
-        // Broaden matching for software gaps
-        if (st.includes('chat') || st.includes('bot') || st.includes('chatbot') || st.includes('messaging')) {
-          ok = noVal(chat);
-        } else if (st.includes('crm') || st.includes('automat') || st.includes('outreach') || st.includes('salesforce') || st.includes('hubspot')) {
-          ok = noVal(crm);
-        } else if (st.includes('payment') || st.includes('order') || st.includes('booking') || st.includes('transaction')) {
-          ok = noVal(pay);
-        } else if (st.includes('ads') || st.includes('advertis') || st.includes('pixel') || st.includes('facebook') || st.includes('google ads')) {
-          ok = ads === 'No' || noVal(ads);
-        } else if (st.includes('website') || st.includes('web presence') || st.includes('online visibility')) {
-          ok = noVal(web);
-        } else if (st.includes('analytics') || st.includes('tracking') || st.includes('pixel')) {
-          ok = noVal(cms) && noVal(chat);
-        } else if (st.includes('logisitic') || st.includes('shipment') || st.includes('carrier') || st.includes('freight')) {
-          // B2B logistics specific gaps — often tied to lack of advanced CRM/Pay integration
-          ok = noVal(crm) || noVal(pay);
-        } else {
-          ok = noVal(cms); // Fallback to CMS check
-        }
-      } else {
-        // problem_evidence — check reviews, rating, or reachability
-        const hasContact = (email && email !== 'N/A' && email !== '') || (phone && phone !== 'N/A' && phone !== '');
-
-        if (st.includes('review') || st.includes('rating') || st.includes('reputation') || st.includes('unhappy')) {
-          // Lower ratings or fewer reviews can be evidence of pain
-          ok = rating < 4.2 || reviews < 15;
-        } else if (st.includes('hiring') || st.includes('vacancy') || st.includes('recruiting')) {
-          // hiring signals are strong evidence of growth or turnover pain
-          ok = reviews > 5; // Proxy: established businesses hire more
-        } else {
-          ok = hasContact; // Default to basic reachability
-        }
-      }
-
-      if (ok) { confirmed.push(sig); blockScore += weight; }
-      else unconfirmed.push(sig);
-    }
-
-    results[block.pain_point_title] = { score: Math.min(blockScore, 100), confirmed, unconfirmed };
-    totalScore += Math.min(blockScore, 100);
-    blockCount++;
-  }
-
-  const overall = blockCount > 0 ? Math.round(totalScore / blockCount) : 0;
-  return { overall, perPainPoint: results };
+// ── Loading bar ───────────────────────────────────────────────────────────────
+function ProgressBar({ current, total, label }) {
+  const pct = total > 0 ? Math.round(current / total * 100) : 0;
+  return (
+    <div style={{ marginTop: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+        <span style={{ fontSize: '0.78rem', color: '#60a5fa' }}>{label}</span>
+        <span style={{ fontSize: '0.78rem', color: 'var(--gold-primary)', fontWeight: 700 }}>{current}/{total} ({pct}%)</span>
+      </div>
+      <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, var(--gold-primary), #ff6b6b)', borderRadius: '3px', transition: 'width 0.3s ease' }} />
+      </div>
+    </div>
+  );
 }
 
-export default function ProspectIntelligence({ leads: globalLeads = [], onSendToOutreach }) {
-  // Inputs
-  const [technology, setTechnology] = useState('');
-  const [industry, setIndustry] = useState('');
-  const [deptOptions, setDeptOptions] = useState(DEFAULT_DEPT_OPTIONS);
-  const [departments, setDepartments] = useState([]); // selected dept slugs
-  const [loadingDepts, setLoadingDepts] = useState(false);
-  const [submitted, setSubmitted] = useState(null);
-
-  // Generation state
+// ── Sub-tab 1: Pain Points ────────────────────────────────────────────────────
+function PainPointsTab({ onDone, existingData }) {
+  const [tech, setTech] = useState(existingData?.technology || '');
+  const [industry, setIndustry] = useState(existingData?.industry || '');
+  const [depts, setDepts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [data, setData] = useState(null);
-  const [fromCache, setFromCache] = useState(false);
+  const [result, setResult] = useState(existingData || null);
 
-  // History panel
-  const [history, setHistory] = useState([]);
-  const [historyOpen, setHistoryOpen] = useState(true);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-
-  // Section open states
-  const [sec1Open, setSec1Open] = useState(true);
-  const [sec2Open, setSec2Open] = useState(true);
-  const [sec3Open, setSec3Open] = useState(true);
-  const [resultsOpen, setResultsOpen] = useState(true);
-
-  // Scraping state
-  const [scrapeKeyword, setScrapeKeyword] = useState('');
-  const [scrapeMax, setScrapeMax] = useState(20);
-  const [scraping, setScraping] = useState(false);
-  const [scrapeStatus, setScrapeStatus] = useState('');
-  const [scrapeLeads, setScrapeLeads] = useState([]);
-  const scrapeIntervalRef = useRef(null);
-
-  // Signal scan state
-  const [scanning, setScanning] = useState(false);
-  const [scoredLeads, setScoredLeads] = useState([]);
-
-  // Runner state (Option A/B)
-  const [runnerSource, setRunnerSource] = useState('existing'); // 'existing' | 'fresh'
-  const [freshLocation, setFreshLocation] = useState('');
-  const [freshSources, setFreshSources] = useState(['Google Maps']);
-  const availableSources = ['Google Maps', 'Yellow Pages', 'Yelp', 'Companies House (UK)', 'LinkedIn Company Search', 'Bark.com', 'Clutch.co', 'Facebook Business Pages'];
-
-  // Table filters
-  const [confThreshold, setConfThreshold] = useState(0);
-  const [filterPainPoint, setFilterPainPoint] = useState('all');
-  const [selectedLeads, setSelectedLeads] = useState(new Set());
-
-  // ── Load history from Supabase ────────────────────────────────────────────
-  const fetchHistory = useCallback(async () => {
-    setLoadingHistory(true);
-    try {
-      const res = await axios.get('/api/market/saved-searches');
-      const pi = (res.data || []).filter(x => x.tab === 'prospect_intel');
-      setHistory(pi);
-    } catch { /* silent */ }
-    finally { setLoadingHistory(false); }
-  }, []);
-
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
-
-  // ── Fetch recommended departments when industry changes ─────────────────
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      setLoadingDepts(true);
-      try {
-        const res = await axios.get(`${API}/market/recommend-departments?industry=${encodeURIComponent(industry)}`);
-        if (res.data && Array.isArray(res.data)) {
-          setDeptOptions(res.data);
-          // Clear selections if they no longer exist in new options
-          setDepartments(prev => prev.filter(slug => res.data.some(opt => opt.slug === slug)));
-        }
-      } catch (err) {
-        console.error("Failed to fetch depts", err);
-      } finally {
-        setLoadingDepts(false);
-      }
-    }, 600); // 600ms debounce
-    return () => clearTimeout(timer);
-  }, [industry]);
-
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)');
-    const onChange = () => { if (mq.matches) setHistoryOpen(false); };
-    onChange();
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-
-  // ── Load a saved history entry ────────────────────────────────────────────
-  const handleLoadHistory = async (entry) => {
+  const generate = async () => {
+    if (!tech.trim()) return;
     setLoading(true);
     setError('');
-    setData(null);
-    setScoredLeads([]);
-    setScrapeLeads([]);
     try {
-      // Load via generate endpoint (will hit cache instantly)
-      // The problem field stores "prospect:{tech}:{industry}"
-      const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
-      const tech = parts[0] || entry.industry;
-      const ind = parts[1] || '';
-      const sub = { technology: tech, industry: ind };
-      setSubmitted(sub);
-      setTechnology(tech);
-      setIndustry(ind);
-      const res = await axios.post('/api/prospect-intel/generate', { technology: tech, industry: ind });
-      setData(res.data);
-      setFromCache(true);
-      const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
-      if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
-
-      // Try to load saved scan results for this tech+industry
-      try {
-        const scanRes = await axios.get(`/api/prospect-intel/scan-results?technology=${encodeURIComponent(tech)}&industry=${encodeURIComponent(ind)}`);
-        if (scanRes.data?.scored_leads?.length) {
-          setScoredLeads(scanRes.data.scored_leads);
-        }
-      } catch { /* no saved scan yet */ }
-    } catch (err) {
-      setError(err?.response?.data?.detail || 'Failed to load saved run.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ── Delete a history entry ────────────────────────────────────────────────
-  const handleDeleteHistory = async (e, cacheKey) => {
-    e.stopPropagation();
-    if (!window.confirm('Delete this saved run?')) return;
-    try {
-      await axios.delete(`/api/market/saved-searches/${cacheKey}`);
-      setHistory(h => h.filter(x => x.cache_key !== cacheKey));
-    } catch { alert('Failed to delete'); }
-  };
-
-  // ── Generate / load from cache ───────────────────────────────────────────
-  const handleGenerate = async (forceRefresh = false) => {
-    if (!technology.trim()) return;
-    setLoading(true);
-    setError('');
-    setData(null);
-    setScoredLeads([]);
-    setScrapeLeads([]);
-    const sub = { technology: technology.trim(), industry: industry.trim(), departments: departments };
-    setSubmitted(sub);
-
-    try {
-      const endpoint = forceRefresh ? `${API}/prospect-intel/refresh` : `${API}/prospect-intel/generate`;
-      const res = await axios.post(endpoint, { technology: sub.technology, industry: sub.industry, departments: sub.departments });
-      setData(res.data);
-      setFromCache(!forceRefresh);
-
-      // Auto-set scrape keyword from primary source
-      const primary = res.data?.section3_lead_sources?.find(s => s.is_primary);
-      if (primary?.search_keyword) setScrapeKeyword(primary.search_keyword);
-
-      // Try to load previously saved scan results
-      try {
-        const scanRes = await axios.get(`/api/prospect-intel/scan-results?technology=${encodeURIComponent(sub.technology)}&industry=${encodeURIComponent(sub.industry)}`);
-        if (scanRes.data?.scored_leads?.length) {
-          setScoredLeads(scanRes.data.scored_leads);
-        }
-      } catch { /* no saved scan yet — user needs to run it */ }
-
-      // Refresh history panel so new entry appears
-      fetchHistory();
-    } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to generate. Try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ── Signal Runner Orchestration ──────────────────────────────────────────
-  const triggerSignalRunner = async (type = 'existing') => {
-    if (!data?.section2_signals || !submitted) return;
-    setScraping(true);
-    setScanning(true);
-    setScrapeStatus(type === 'fresh' ? 'Initiating multi-source scrape...' : 'Starting database signal analysis...');
-
-    try {
-      await axios.post(`${API}/prospect-intel/run-signals`, {
-        source: type,
-        industry: type === 'fresh' ? freshIndustry : submitted.industry,
-        location: type === 'fresh' ? freshLocation : '',
-        num_businesses: type === 'fresh' ? freshVolume : 20,
-        sources: type === 'fresh' ? freshSources : ["Google Maps"],
-        signal_plan: data.section2_signals
+      const res = await axios.post(`${API}/prospect-intel/v2/pain-points`, {
+        technology: tech.trim(),
+        industry: industry.trim(),
+        departments: depts,
       });
-
-      // Poll analyzing status
-      scrapeIntervalRef.current = setInterval(async () => {
-        try {
-          const st = await axios.get(`${API}/status`);
-          const s = st.data?.analyzing;
-          setScrapeStatus(s?.progress || '');
-          if (!s?.active) {
-            clearInterval(scrapeIntervalRef.current);
-            setScraping(false);
-            setScanning(false);
-            setScrapeStatus('Runner finished — loading results...');
-            // Fetch results
-            const res = await axios.get(`${API}/results`);
-            const normalized = (res.data || []).map(l => {
-              // Map backend signal_evidence to frontend _perPainPoint
-              let ev = {};
-              try {
-                ev = typeof l['Signal Evidence'] === 'string' ? JSON.parse(l['Signal Evidence']) : (l['Signal Evidence'] || {});
-              } catch { ev = {}; }
-
-              return {
-                ...l,
-                _overall: parseInt(l['Overall Score'] || 0),
-                _perPainPoint: ev,
-                _rating: l['Rating'] || 'COLD', // HOT/WARM/COLD
-              };
-            });
-            setScrapeLeads(normalized);
-            setScoredLeads(normalized);
-          }
-        } catch {
-          clearInterval(scrapeIntervalRef.current);
-          setScraping(false);
-          setScanning(false);
-        }
-      }, 2500);
-    } catch (err) {
-      setScraping(false);
-      setScanning(false);
-      setScrapeStatus(err?.response?.data?.detail || 'Runner failed');
+      setResult(res.data);
+      onDone(res.data);
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Generation failed');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleScrape = () => triggerSignalRunner('fresh');
-  const handleSignalScan = () => triggerSignalRunner('existing');
-
-  // ── Export CSV ───────────────────────────────────────────────────────────
-  const handleExportCSV = () => {
-    if (!scoredLeads.length) return;
-    const painTitles = data?.section2_signals?.map(b => b.pain_point_title) || [];
-    const headers = ['Business Name', 'Industry', 'Email', 'Phone', 'Website', 'Overall Score', ...painTitles];
-    const rows = scoredLeads.map(l => [
-      l['Business Name'] || '', l['Industry'] || '',
-      l['Email'] || '', l['Phone'] || '',
-      l['Website'] || '', l._overall,
-      ...painTitles.map(pt => l._perPainPoint?.[pt]?.score || 0)
-    ]);
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `prospect_intel_${submitted?.technology}_${Date.now()}.csv`; a.click();
-  };
-
-  // ── Send selected to Outreach ─────────────────────────────────────────────
-  const handleSendToOutreach = () => {
-    if (!onSendToOutreach) return;
-    const toSend = scoredLeads.filter((_, i) => selectedLeads.has(i));
-    onSendToOutreach(toSend);
-  };
-
-  // ── Filtered leads ────────────────────────────────────────────────────────
-  const filteredScored = scoredLeads.filter(l => {
-    if (l._overall < confThreshold) return false;
-    if (filterPainPoint !== 'all') {
-      const ppScore = l._perPainPoint?.[filterPainPoint]?.score || 0;
-      if (ppScore < confThreshold) return false;
-    }
-    return true;
-  });
-
-  const painTitles = data?.section2_signals?.map(b => b.pain_point_title) || [];
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="animate-fade-in prospect-intel-page">
-
-      {/* HEADER */}
-      <div className="pi-header">
-        <h2>
-          <Zap size={24} style={{ color: 'var(--gold-primary)', flexShrink: 0 }} /> Prospect Intelligence
-        </h2>
-        <p>
-          Enter a technology or keyword → AI generates pain points, signal detection plan, and lead sources → scrape and score leads automatically.
-        </p>
-      </div>
-
-      {/* HISTORY PANEL */}
-      <div className="card" style={{ padding: '0.85rem 1.1rem' }}>
-        <div onClick={() => setHistoryOpen(o => !o)}
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={15} style={{ color: 'var(--gold-primary)' }} />
-            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--gold-primary)' }}>Saved Runs</span>
-            <span style={{ background: 'rgba(212,175,55,0.15)', color: 'var(--gold-primary)', fontSize: '0.7rem', fontWeight: 700, padding: '1px 8px', borderRadius: '20px', border: '1px solid rgba(212,175,55,0.3)' }}>
-              {history.length}
-            </span>
-            {loadingHistory && <Loader size={12} className="animate-spin" style={{ color: 'var(--text-muted)' }} />}
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--gold-primary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Technology / Keyword <span style={{ color: '#ff6b6b' }}>*</span>
+            </label>
+            <div style={{ position: 'relative' }}>
+              <Zap size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--gold-primary)' }} />
+              <input value={tech} onChange={e => setTech(e.target.value)}
+                placeholder="e.g. chatbots, voice agents, website design"
+                onKeyDown={e => e.key === 'Enter' && generate()}
+                style={{ paddingLeft: '30px', width: '100%' }} />
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button onClick={e => { e.stopPropagation(); fetchHistory(); }}
-              style={{ margin: 0, width: 'auto', padding: '2px 8px', fontSize: '0.7rem', background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', transform: 'none', boxShadow: 'none' }}>
-              <RefreshCw size={10} />
-            </button>
-            {historyOpen ? <ChevronUp size={15} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={15} style={{ color: 'var(--text-muted)' }} />}
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Industry
+            </label>
+            <div style={{ position: 'relative' }}>
+              <Globe size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input value={industry} onChange={e => setIndustry(e.target.value)}
+                placeholder="e.g. restaurants, real estate, dental"
+                style={{ paddingLeft: '28px', width: '100%' }} />
+            </div>
           </div>
         </div>
-
-        {historyOpen && (
-          <div style={{ marginTop: '0.75rem' }}>
-            {history.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', padding: '0.5rem 0' }}>
-                No saved runs yet. Generate your first intelligence report above.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {history.map((entry, i) => {
-                  const parts = (entry.problem || '').replace(/^prospect:/, '').split(':');
-                  const tech = parts[0] || entry.industry;
-                  const ind = parts[1] || '';
-                  const isActive = submitted?.technology === tech && submitted?.industry === ind;
-                  return (
-                    <div key={i}
-                      onClick={() => handleLoadHistory(entry)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '6px',
-                        background: isActive ? 'rgba(212,175,55,0.12)' : 'rgba(255,255,255,0.03)',
-                        border: `1px solid ${isActive ? 'rgba(212,175,55,0.4)' : 'rgba(255,255,255,0.08)'}`,
-                        borderRadius: '8px', padding: '5px 10px', cursor: 'pointer',
-                        transition: 'all 0.15s ease'
-                      }}>
-                      <Zap size={11} style={{ color: isActive ? 'var(--gold-primary)' : '#a78bfa', flexShrink: 0 }} />
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: isActive ? 'var(--gold-primary)' : '#fff' }}>
-                        {tech}
-                      </span>
-                      {ind && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>· {ind}</span>}
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                        {entry.saved_at?.slice(0, 10)}
-                      </span>
-                      <button
-                        onClick={e => handleDeleteHistory(e, entry.cache_key)}
-                        style={{ all: 'unset', cursor: 'pointer', color: 'rgba(255,107,107,0.4)', fontSize: '0.9rem', lineHeight: 1, padding: '0 2px' }}
-                        title="Delete">×</button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        <div style={{ marginTop: '1rem', display: 'flex', gap: '8px' }}>
+          <button onClick={generate} disabled={loading || !tech.trim()}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gold-primary)', color: '#000', fontWeight: 800, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0 }}>
+            {loading ? <Loader size={15} className="animate-spin" /> : <Search size={15} />}
+            {loading ? 'Researching...' : 'Generate Pain Points'}
+          </button>
+          {result && (
+            <button onClick={generate} disabled={loading}
+              title="Regenerate fresh" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.75rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0 }}>
+              <RefreshCw size={14} />
+            </button>
+          )}
+        </div>
+        {result?.web_research_used && (
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.68rem', color: '#39ff14', background: 'rgba(57,255,20,0.08)', border: '1px solid rgba(57,255,20,0.2)', padding: '2px 8px', borderRadius: '12px' }}>
+              ✓ Reddit: {result.reddit_posts_found} posts analysed
+            </span>
+            <span style={{ fontSize: '0.68rem', color: '#60a5fa', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', padding: '2px 8px', borderRadius: '12px' }}>
+              ✓ Indeed: {result.indeed_jobs_found} job postings analysed
+            </span>
           </div>
         )}
       </div>
 
-      {/* INPUT FORM */}
-      <div className="card">
-        <form onSubmit={e => { e.preventDefault(); handleGenerate(false); }} className="pi-form">
-          <div className="pi-form-field pi-form-field--wide">
-            <label>Technology / Keyword <span style={{ color: '#ff6b6b', fontWeight: 700 }}>*</span></label>
-            <div style={{ position: 'relative' }}>
-              <Zap size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--gold-primary)' }} />
-              <input type="text" value={technology} onChange={e => setTechnology(e.target.value)}
-                placeholder="e.g. chatbots, voice agents, website development, automation"
-                style={{ paddingLeft: '32px' }} required />
-            </div>
-          </div>
-          <div className="pi-form-field">
-            <label>Industry <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
-            <div style={{ position: 'relative' }}>
-              <Globe size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input type="text" value={industry} onChange={e => setIndustry(e.target.value)}
-                placeholder="e.g. restaurants, real estate" style={{ paddingLeft: '30px' }} />
-            </div>
-          </div>
-
-          {/* Department / Stakeholder Focus */}
-          <div style={{ gridColumn: '1 / -1' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              Department / Stakeholder Focus
-              <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0, marginLeft: '6px' }}>(optional — select all that apply)</span>
-              {loadingDepts && <Loader size={12} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />}
-            </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
-              {deptOptions.map(opt => {
-                const selected = departments.includes(opt.slug);
-                return (
-                  <button key={opt.slug} type="button"
-                    onClick={() => setDepartments(prev =>
-                      prev.includes(opt.slug) ? prev.filter(d => d !== opt.slug) : [...prev, opt.slug]
-                    )}
-                    style={{
-                      margin: 0, width: 'auto', padding: '5px 12px',
-                      background: selected ? `${opt.color}18` : 'rgba(255,255,255,0.03)',
-                      border: `1px solid ${selected ? opt.color : 'rgba(255,255,255,0.1)'}`,
-                      color: selected ? opt.color : 'var(--text-muted)',
-                      borderRadius: '20px', fontSize: '0.78rem', fontWeight: selected ? 700 : 400,
-                      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '1px',
-                      transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0,
-                      transition: 'all 0.15s ease', cursor: 'pointer'
-                    }}>
-                    <span>{opt.label}</span>
-                    <span style={{ fontSize: '0.65rem', opacity: 0.7, fontWeight: 400 }}>{opt.sub}</span>
-                  </button>
-                );
-              })}
-              {departments.length > 0 && (
-                <button type="button"
-                  onClick={() => setDepartments([])}
-                  style={{ margin: 0, width: 'auto', padding: '5px 12px', background: 'rgba(220,53,69,0.08)', border: '1px solid rgba(220,53,69,0.25)', color: '#ff6b6b', borderRadius: '20px', fontSize: '0.72rem', transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0 }}>
-                  Clear all ×
-                </button>
-              )}
-            </div>
-            {departments.length === 0 && (
-              <p style={{ margin: '4px 0 0', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                None selected = All Departments (default)
-              </p>
-            )}
-          </div>
-
-          <div className="pi-form-actions">
-            <button type="submit" disabled={loading || !technology.trim()} className="pi-btn-primary">
-              {loading ? <Loader size={15} className="animate-spin" /> : <Search size={15} />}
-              {loading ? 'Generating…' : 'Generate Intelligence'}
-            </button>
-            {data && (
-              <button type="button" onClick={() => handleGenerate(true)} disabled={loading}
-                title="Regenerate fresh from LLM"
-                style={{ width: 'auto', marginBottom: 0, padding: '0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', color: 'var(--text-muted)', transform: 'none', boxShadow: 'none' }}>
-                <RefreshCw size={15} />
-              </button>
-            )}
-          </div>
-        </form>
-      </div>
-
-      {/* ERROR */}
       {error && (
-        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '1rem', color: '#ff6b6b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '2px' }} /><span>{error}</span>
-          </div>
-          <button onClick={() => handleGenerate(true)} style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: '0.78rem', background: 'rgba(220,53,69,0.15)', border: '1px solid rgba(220,53,69,0.4)', color: '#ff6b6b', transform: 'none', boxShadow: 'none' }}>Retry</button>
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', color: '#ff6b6b', marginBottom: '1rem', display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '0.85rem' }}>
+          <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '2px' }} />{error}
         </div>
       )}
 
-      {/* LOADING */}
       {loading && (
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '3rem', gap: '1rem' }}>
-          <Loader size={32} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />
-          <span style={{ color: 'var(--text-muted)' }}>Generating pain points, signal detection plan, and lead sources with AI…</span>
-          <span style={{ color: 'rgba(212,175,55,0.5)', fontSize: '0.78rem' }}>Takes 20–40 seconds · result is cached for instant future loads</span>
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
+          <Loader size={28} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Searching Reddit, Indeed, and synthesising with AI...</span>
         </div>
       )}
 
-      {/* SUMMARY BAR */}
-      {data && submitted && (
-        <div className="pi-summary-bar">
-          {[
-            { label: 'Technology', value: submitted.technology, color: 'var(--gold-primary)' },
-            { label: 'Industry Scope', value: submitted.industry || 'All Industries', color: '#60a5fa' },
-            { label: 'Pain Points', value: data.section1_pain_points?.length || 0, color: '#ff6b6b' },
-            { label: 'Signal Blocks', value: data.section2_signals?.length || 0, color: '#a78bfa' },
-            { label: 'Lead Sources', value: data.section3_lead_sources?.length || 0, color: '#39ff14' },
-            { label: 'Scored Leads', value: scoredLeads.length, color: '#ffdf00' },
-          ].map((s, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-              <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>{s.label}</span>
-              <span style={{ fontSize: '1.1rem', fontWeight: 700, color: s.color }}>{s.value}</span>
+      {result && !loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {(result.pain_points || []).map((pp, i) => (
+            <div key={i} className="card" style={{ borderLeft: '3px solid #ff6b6b', padding: '1rem 1.1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '0.6rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ background: 'rgba(255,107,107,0.15)', color: '#ff6b6b', fontSize: '0.65rem', fontWeight: 800, padding: '2px 7px', borderRadius: '20px' }}>#{i + 1}</span>
+                  <strong style={{ color: 'var(--gold-primary)', fontSize: '0.95rem' }}>{pp.title}</strong>
+                </div>
+                <FreqBadge freq={pp.frequency} />
+              </div>
+              <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.65 }}>{pp.description}</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '0.5rem' }}>
+                <div style={{ background: 'rgba(57,255,20,0.05)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
+                  <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>Revenue Impact</div>
+                  <div style={{ fontSize: '0.82rem', color: '#a7f3d0' }}>{pp.revenue_impact}</div>
+                </div>
+                <div style={{ background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
+                  <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>Why Tech Solves It</div>
+                  <div style={{ fontSize: '0.82rem', color: '#ddd6fe' }}>{pp.why_tech_solves}</div>
+                </div>
+              </div>
+              {pp.job_titles?.length > 0 && (
+                <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Feels this pain:</span>
+                  {pp.job_titles.map((jt, ji) => (
+                    <span key={ji} style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', fontSize: '0.68rem', padding: '1px 7px', borderRadius: '10px' }}>
+                      {jt}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {pp.web_evidence && (
+                <div style={{ marginTop: '0.5rem', background: 'rgba(57,255,20,0.04)', border: '1px solid rgba(57,255,20,0.12)', borderRadius: '6px', padding: '0.4rem 0.65rem', fontSize: '0.72rem', color: '#86efac' }}>
+                  <span style={{ color: '#39ff14', fontWeight: 700 }}>Web evidence:</span> {pp.web_evidence}
+                </div>
+              )}
             </div>
           ))}
-          {fromCache && <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: '#39ff14', background: 'rgba(40,167,69,0.1)', border: '1px solid rgba(40,167,69,0.3)', padding: '2px 10px', borderRadius: '20px' }}>✓ From Supabase cache</span>}
-          {/* Departments targeted */}
-          {submitted.departments?.length > 0 && (
-            <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center', marginLeft: 'auto' }}>
-              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Dept Focus:</span>
-              {submitted.departments.map(slug => <DeptBadge key={slug} dept={slug} options={deptOptions} size="xs" />)}
-            </div>
-          )}
         </div>
       )}
 
-      {data && (
-        <>
-          {/* ── SECTION 1: PAIN POINTS ─────────────────────────────────────── */}
-          <AccordionSection title="Section 1 — Pain Points" icon={AlertCircle} iconColor="#ff6b6b"
-            status={data.section1_pain_points?.length ? 'generated' : 'none'}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {(data.section1_pain_points || []).map((pp, i) => (
-                <div key={i} style={{ background: 'rgba(255,107,107,0.04)', border: '1px solid rgba(255,107,107,0.15)', borderRadius: '10px', padding: '1rem 1.1rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '0.6rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ background: 'rgba(255,107,107,0.15)', color: '#ff6b6b', fontSize: '0.68rem', fontWeight: 800, padding: '2px 8px', borderRadius: '20px', border: '1px solid rgba(255,107,107,0.3)' }}>#{i + 1}</span>
-                      <strong style={{ color: 'var(--gold-primary)', fontSize: '0.97rem' }}>{pp.title}</strong>
-                    </div>
-                    <FreqBadge freq={pp.frequency} />
-                  </div>
-                  <p style={{ margin: '0 0 0.6rem', fontSize: '0.87rem', color: 'var(--text-main)', lineHeight: 1.65 }}>{pp.description}</p>
-                  <div className="pi-grid-2" style={{ marginTop: '0.5rem' }}>
-                    <div style={{ background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Revenue Impact</div>
-                      <div style={{ fontSize: '0.83rem', color: '#a7f3d0' }}>{pp.revenue_impact}</div>
-                    </div>
-                    <div style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Why Tech Solves It</div>
-                      <div style={{ fontSize: '0.83rem', color: '#ddd6fe' }}>{pp.why_tech_solves}</div>
-                    </div>
-                  </div>
+      {!result && !loading && (
+        <div style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.5 }}>
+          <AlertCircle size={40} style={{ color: '#ff6b6b', marginBottom: '1rem', opacity: 0.3 }} />
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Enter a technology above to generate pain points backed by live web research.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
-                  {/* Who Feels This Pain */}
-                  {pp.who_feels_pain?.length > 0 && (
-                    <div style={{ marginTop: '0.65rem', background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.15)', borderRadius: '7px', padding: '0.6rem 0.75rem' }}>
-                      <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Users size={10} /> Who Feels This Pain
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        {pp.who_feels_pain.map((wfp, wi) => (
-                          <div key={wi} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                            <DeptBadge dept={wfp.department} options={deptOptions} size="xs" />
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                              {Array.isArray(wfp.job_titles) ? wfp.job_titles.join(', ') : wfp.job_titles}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+// ── Sub-tab 2: Signal Plans ───────────────────────────────────────────────────
+function SignalPlansTab({ painData, onDone, existingPlans }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [plans, setPlans] = useState(existingPlans || []);
+  const [expanded, setExpanded] = useState({});
+  const autoGenRef = useRef(false);
+
+  const generate = useCallback(async () => {
+    if (!painData?.pain_points?.length) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await axios.post(`${API}/prospect-intel/v2/signal-plans`, {
+        pain_points: painData.pain_points,
+        industry: painData.industry || '',
+        technology: painData.technology || '',
+        session_id: painData.session_id || '',
+      });
+      setPlans(res.data.signal_plans || []);
+      onDone(res.data.signal_plans || []);
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Failed to generate signal plans');
+    } finally {
+      setLoading(false);
+    }
+  }, [painData, onDone]);
+
+  useEffect(() => {
+    if (painData?.pain_points?.length && !existingPlans?.length && !autoGenRef.current) {
+      autoGenRef.current = true;
+      generate();
+    }
+  }, [painData, existingPlans, generate]);
+
+  const diffColor = { easy: '#39ff14', medium: '#ffdf00', hard: '#ff6b6b' };
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--gold-primary)' }}>Signal Detection Plans</div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {painData?.pain_points?.length
+                ? `Auto-generated from ${painData.pain_points.length} pain points in Sub-tab 1`
+                : 'Go to Sub-tab 1 and generate pain points first'}
             </div>
-          </AccordionSection>
-
-          {/* ── SECTION 2: SIGNAL DETECTION PLAN ──────────────────────────── */}
-          <AccordionSection title="Section 2 — Signal Detection Plan" icon={Shield} iconColor="#a78bfa"
-            status={data.section2_signals?.length ? 'generated' : 'none'}
-            action={
-              <button onClick={e => { e.stopPropagation(); handleSignalScan(); }}
-                disabled={scanning || (!scrapeLeads.length && !globalLeads.length)}
-                style={{ margin: 0, width: 'auto', padding: '4px 12px', fontSize: '0.78rem', background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)', color: '#a78bfa', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '6px', transform: 'none', boxShadow: 'none' }}>
-                {scanning ? <Loader size={11} className="animate-spin" /> : <Activity size={11} />}
-                {scanning ? 'Scanning…' : 'Run Signal Scan'}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {painData?.pain_points?.length > 0 && (
+              <button onClick={generate} disabled={loading}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(167,139,250,0.15)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.35)', padding: '0.6rem 1.1rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0, fontSize: '0.82rem', fontWeight: 700 }}>
+                {loading ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                {plans.length ? 'Regenerate' : 'Generate Plans'}
               </button>
-            }>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', marginBottom: '1.25rem', lineHeight: 1.5 }}>
-              Each pain point: <strong style={{ color: '#60a5fa' }}>Side 1 — Solution Gap</strong> (no fix in place) + <strong style={{ color: '#fbbf24' }}>Side 2 — Problem Evidence</strong> (pain exists). Weights sum to 100%.
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-              {(data.section2_signals || []).map((block, bi) => {
-                const side1 = block.signals?.filter(s => s.side === 'solution_gap') || [];
-                const side2 = block.signals?.filter(s => s.side === 'problem_evidence') || [];
-                const totalW = block.signals?.reduce((a, s) => a + (s.weight || 0), 0) || 0;
-                return (
-                  <div key={bi} style={{ background: 'rgba(138,43,226,0.04)', border: '1px solid rgba(138,43,226,0.18)', borderRadius: '10px', overflow: 'hidden' }}>
-                    <div style={{ padding: '0.85rem 1rem', borderBottom: '1px solid rgba(138,43,226,0.12)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                        <AlertCircle size={14} style={{ color: '#f87171' }} />
-                        <span style={{ fontWeight: 700, color: 'var(--gold-primary)', fontSize: '0.92rem' }}>{block.pain_point_title}</span>
-                      </div>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        {/* Who to Contact */}
-                        {block.who_to_contact && (
-                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '8px', padding: '3px 10px' }}>
-                            <Users size={11} style={{ color: '#60a5fa', flexShrink: 0 }} />
-                            <div>
-                              <span style={{ fontSize: '0.6rem', color: '#60a5fa', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block' }}>Contact</span>
-                              <span style={{ fontSize: '0.75rem', color: '#fff', fontWeight: 600 }}>{block.who_to_contact.job_title}</span>
-                              {block.who_to_contact.department && <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: '4px' }}>· {block.who_to_contact.department}</span>}
-                            </div>
-                          </div>
-                        )}
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                          {totalW}% total weight
-                        </span>
-                      </div>
-                    </div>
-                    <div className="pi-signal-grid">
-                      <div className="pi-signal-col pi-signal-col--left">
-                        <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          <Shield size={11} /> Side 1 — Solution Gap
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-                          {side1.map((sig, si) => <MiniSignalCard key={si} sig={sig} accent="#60a5fa" />)}
-                          {side1.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No side 1 signals.</span>}
-                        </div>
-                      </div>
-                      <div className="pi-signal-col">
-                        <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          <Zap size={11} /> Side 2 — Problem Evidence
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
-                          {side2.map((sig, si) => <MiniSignalCard key={si} sig={sig} accent="#fbbf24" />)}
-                          {side2.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>No side 2 signals.</span>}
-                        </div>
-                      </div>
-                    </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', color: '#ff6b6b', marginBottom: '1rem', fontSize: '0.85rem' }}>
+          {error}
+        </div>
+      )}
+
+      {loading && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
+          <Loader size={28} className="animate-spin" style={{ color: '#a78bfa' }} />
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Generating signal detection plans with industry-specific sources...</span>
+        </div>
+      )}
+
+      {!painData?.pain_points?.length && !loading && (
+        <div style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.5 }}>
+          <Shield size={40} style={{ color: '#a78bfa', marginBottom: '1rem', opacity: 0.3 }} />
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Complete Sub-tab 1 first — signal plans are generated from your pain points.</p>
+        </div>
+      )}
+
+      {plans.length > 0 && !loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {plans.map((plan, pi) => {
+            const isExp = expanded[pi];
+            return (
+              <div key={pi} className="card" style={{ borderLeft: '3px solid #a78bfa', padding: 0, overflow: 'hidden' }}>
+                <div onClick={() => setExpanded(e => ({ ...e, [pi]: !e[pi] }))}
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1rem', cursor: 'pointer', background: 'rgba(167,139,250,0.04)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Shield size={14} style={{ color: '#a78bfa' }} />
+                    <strong style={{ color: 'var(--gold-primary)', fontSize: '0.9rem' }}>{plan.pain_point_title || plan.pain_point}</strong>
+                    <span style={{ fontSize: '0.68rem', background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', padding: '1px 7px', borderRadius: '10px' }}>
+                      {plan.checks?.length || 0} checks
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          </AccordionSection>
-
-          {/* ── SECTION 3: SIGNAL DETECTION RUNNER ────────────────────────── */}
-          <AccordionSection title="Section 3 — Signal Detection Runner" icon={Zap} iconColor="#ffdf00"
-            status={(scoredLeads.length || scraping) ? 'generated' : 'none'}>
-
-            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid var(--border-color)', padding: '1.25rem' }}>
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ color: 'var(--gold-primary)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.8rem', display: 'block' }}>
-                  Step 1 — Source Selection
-                </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                  <div
-                    onClick={() => setRunnerSource('existing')}
-                    style={{
-                      padding: '1rem', borderRadius: '10px', border: `1px solid ${runnerSource === 'existing' ? 'var(--gold-primary)' : 'rgba(255,255,255,0.1)'}`,
-                      background: runnerSource === 'existing' ? 'rgba(212,175,55,0.1)' : 'rgba(0,0,0,0.2)', cursor: 'pointer', transition: 'all 0.2s'
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: runnerSource === 'existing' ? 'var(--gold-primary)' : '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Database size={16} /> Option A: Existing Leads
-                    </div>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '5px 0 0' }}>Run signal analysis on leads already in your central database.</p>
-                  </div>
-                  <div
-                    onClick={() => setRunnerSource('fresh')}
-                    style={{
-                      padding: '1rem', borderRadius: '10px', border: `1px solid ${runnerSource === 'fresh' ? 'var(--gold-primary)' : 'rgba(255,255,255,0.1)'}`,
-                      background: runnerSource === 'fresh' ? 'rgba(212,175,55,0.1)' : 'rgba(0,0,0,0.2)', cursor: 'pointer', transition: 'all 0.2s'
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: runnerSource === 'fresh' ? 'var(--gold-primary)' : '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Search size={16} /> Option B: Fresh Scrape
-                    </div>
-                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '5px 0 0' }}>Scrape new businesses from multiple live sources, then run signals.</p>
-                  </div>
-                </div>
-              </div>
-
-              {runnerSource === 'fresh' && (
-                <div className="animate-fade-in" style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                  <label style={{ color: 'var(--gold-primary)', fontWeight: 700, fontSize: '0.95rem', marginBottom: '1rem', display: 'block' }}>
-                    Step 2 — Fresh Scrape Configuration
-                  </label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                    <div className="pi-form-field">
-                      <label>Industry</label>
-                      <input type="text" value={freshIndustry} onChange={e => setFreshIndustry(e.target.value)} placeholder="e.g. real estate" />
-                    </div>
-                    <div className="pi-form-field">
-                      <label>Location</label>
-                      <input type="text" value={freshLocation} onChange={e => setFreshLocation(e.target.value)} placeholder="e.g. London, UK" />
-                    </div>
-                    <div className="pi-form-field">
-                      <label>Number of Businesses</label>
-                      <input type="number" value={scrapeMax} onChange={e => setScrapeMax(Number(e.target.value))} min={5} max={100} />
-                    </div>
-                  </div>
-                  <div style={{ marginTop: '1rem' }}>
-                    <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff', marginBottom: '8px', display: 'block' }}>Sources to scrape from:</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px' }}>
-                      {availableSources.map(src => (
-                        <label key={src} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={freshSources.includes(src)}
-                            onChange={e => setFreshSources(prev => e.target.checked ? [...prev, src] : prev.filter(s => s !== src))}
-                          />
-                          {src}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                <button
-                  onClick={runnerSource === 'existing' ? handleSignalScan : handleScrape}
-                  disabled={scraping || scanning || (runnerSource === 'fresh' && (!freshIndustry || !freshLocation))}
-                  style={{
-                    margin: 0, width: 'auto', padding: '0.85rem 2rem', background: 'var(--gold-primary)', color: '#000',
-                    fontWeight: 800, borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px', transform: 'scale(1.02)'
-                  }}
-                >
-                  {(scraping || scanning) ? <Loader size={18} className="animate-spin" /> : <Play size={18} fill="currentColor" />}
-                  {runnerSource === 'existing' ? 'Run Signal Detection' : 'Start Fresh Scrape & Analysis'}
-                </button>
-              </div>
-
-              {(scrapeStatus || scanning) && (
-                <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <Loader size={16} className="animate-spin" style={{ color: '#60a5fa' }} />
-                  <span style={{ fontSize: '0.85rem', color: '#60a5fa', fontWeight: 600 }}>{scrapeStatus || 'Scoring leads against intelligence detection plan…'}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Strategy Context (Original Cards) */}
-            <div style={{ marginTop: '1.5rem' }}>
-              <label style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '1rem', display: 'block', textTransform: 'uppercase' }}>
-                AI Strategy Guidance
-              </label>
-              <div className="pi-source-grid">
-                {(data.section3_lead_sources || []).map((src, i) => (
-                  <div key={i} style={{
-                    background: src.is_primary ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
-                    border: `1px solid ${src.is_primary ? 'rgba(212,175,55,0.25)' : 'rgba(255,255,255,0.07)'}`,
-                    borderRadius: '8px', padding: '0.85rem 1rem'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {src.is_primary && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: 'var(--gold-primary)', background: 'rgba(212,175,55,0.15)', padding: '1px 6px', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.3)' }}>PRIMARY</span>}
-                        <strong style={{ fontSize: '0.88rem', color: src.is_primary ? 'var(--gold-primary)' : '#fff' }}>{src.platform}</strong>
-                      </div>
-                      <span style={{
-                        fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '10px',
-                        color: src.estimated_volume === 'high' ? '#39ff14' : src.estimated_volume === 'medium' ? '#ffdf00' : '#a78bfa',
-                        background: src.estimated_volume === 'high' ? 'rgba(57,255,20,0.1)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.1)' : 'rgba(167,139,250,0.1)',
-                        border: `1px solid ${src.estimated_volume === 'high' ? 'rgba(57,255,20,0.3)' : src.estimated_volume === 'medium' ? 'rgba(255,223,0,0.3)' : 'rgba(167,139,250,0.3)'}`
-                      }}>{src.estimated_volume} volume</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginBottom: '0.5rem' }}>
-                      <Search size={12} style={{ color: 'var(--gold-primary)', marginTop: '3px' }} />
-                      <code style={{ fontSize: '0.78rem', color: 'var(--gold-primary)', fontWeight: 600 }}>{src.search_keyword}</code>
-                    </div>
-                    <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{src.why}</p>
-                    {src.decision_maker && (
-                      <div style={{ marginTop: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '6px', padding: '0.5rem 0.7rem' }}>
-                        <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Users size={9} /> Decision Maker to Target
-                        </div>
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>{src.decision_maker.job_title}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {plan.decision_maker?.job_title && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', padding: '3px 9px', borderRadius: '8px' }}>
+                        <Users size={10} style={{ color: '#60a5fa' }} />
+                        <span style={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600 }}>{plan.decision_maker.job_title}</span>
                       </div>
                     )}
+                    {isExp ? <ChevronUp size={14} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
                   </div>
-                ))}
-              </div>
-            </div>
-          </AccordionSection>
-
-          {/* ── RESULTS TABLE ─────────────────────────────────────────────── */}
-          {(scoredLeads.length > 0 || scanning) && (
-            <div className="card pi-results-card">
-              <div className="pi-results-toolbar">
-                <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <BarChart2 size={17} style={{ color: 'var(--gold-primary)' }} /> Scored Leads
-                  <span className="badge" style={{ margin: 0 }}>{filteredScored.length} / {scoredLeads.length}</span>
-                </h3>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                  {/* Confidence threshold */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Min score:</span>
-                    <input type="range" min={0} max={100} value={confThreshold} onChange={e => setConfThreshold(Number(e.target.value))}
-                      style={{ width: '100px', accentColor: 'var(--gold-primary)' }} />
-                    <span style={{ fontSize: '0.72rem', color: 'var(--gold-primary)', fontWeight: 700, minWidth: '30px' }}>{confThreshold}%</span>
-                  </div>
-                  {/* Pain point filter */}
-                  <select value={filterPainPoint} onChange={e => setFilterPainPoint(e.target.value)}
-                    style={{ height: '32px', fontSize: '0.78rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: 'var(--text-main)', borderRadius: '6px', padding: '0 8px', width: 'auto' }}>
-                    <option value="all">All Pain Points</option>
-                    {painTitles.map((pt, i) => <option key={i} value={pt}>{pt}</option>)}
-                  </select>
-                  {/* Export */}
-                  <button onClick={handleExportCSV}
-                    style={{ margin: 0, width: 'auto', padding: '5px 12px', fontSize: '0.78rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-color)', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px', transform: 'none', boxShadow: 'none' }}>
-                    <Download size={13} /> Export CSV
-                  </button>
-                  {/* Send to Outreach */}
-                  {onSendToOutreach && selectedLeads.size > 0 && (
-                    <button onClick={handleSendToOutreach}
-                      style={{ margin: 0, width: 'auto', padding: '5px 12px', fontSize: '0.78rem', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.35)', color: 'var(--gold-primary)', display: 'flex', alignItems: 'center', gap: '5px', transform: 'none', boxShadow: 'none' }}>
-                      <Send size={13} /> Send {selectedLeads.size} to Outreach
-                    </button>
-                  )}
                 </div>
-              </div>
-
-              {scanning ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '2rem', color: 'var(--text-muted)' }}>
-                  <Loader size={20} className="animate-spin" style={{ color: '#a78bfa' }} /> Running signal scan across {(scrapeLeads.length || globalLeads.length)} leads…
-                </div>
-              ) : (
-                <>
-                  <div className="pi-table-scroll">
-                    <table className="pi-results-table">
-                      <thead>
-                        <tr>
-                          <th style={thStyle}><input type="checkbox" onChange={e => {
-                            if (e.target.checked) setSelectedLeads(new Set(filteredScored.map((_, i) => i)));
-                            else setSelectedLeads(new Set());
-                          }} /></th>
-                          <th style={thStyle}>Business & Website</th>
-                          <th style={thStyle}>Category</th>
-                          <th style={thStyle}>Contact Info</th>
-                          <th style={thStyle}>Rating</th>
-                          <th style={thStyle}>Signal Score</th>
-                          <th style={thStyle}>Evidence & Transformation</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredScored.map((lead, idx) => {
-                          const name = lead['Business Name'] || lead['business_name'] || '—';
-                          const category = lead['Category'] || lead['industry'] || '—';
-                          const email = lead['Email'] || lead['email'] || '';
-                          const phone = lead['Phone'] || lead['phone'] || '';
-                          const website = lead['Website'] || lead['website'] || '';
-                          const score = lead._overall || 0;
-
-                          // Hot/Warm/Cold
-                          let rating = { label: 'COLD', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' };
-                          if (score >= 80) rating = { label: 'HOT', color: '#ff4d4d', bg: 'rgba(255, 77, 77, 0.15)' };
-                          else if (score >= 45) rating = { label: 'WARM', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
-
-                          const isSelected = selectedLeads.has(idx);
-                          return (
-                            <tr key={idx} style={{ background: isSelected ? 'rgba(212,175,55,0.05)' : 'transparent', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                              <td style={tdStyle}>
-                                <input type="checkbox" checked={isSelected} onChange={e => {
-                                  const ns = new Set(selectedLeads);
-                                  e.target.checked ? ns.add(idx) : ns.delete(idx);
-                                  setSelectedLeads(ns);
-                                }} />
-                              </td>
-                              <td style={tdStyle}>
-                                <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.88rem' }}>{name}</div>
-                                {website && website !== 'N/A' && <a href={website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.72rem', color: 'var(--gold-secondary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '3px', opacity: 0.8 }}>
-                                  <LinkIcon size={10} /> {website.replace(/^https?:\/\//, '').split('/')[0]}
-                                </a>}
-                              </td>
-                              <td style={{ ...tdStyle, color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                <span style={{ background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>{category}</span>
-                              </td>
-                              <td style={tdStyle}>
-                                {email && email !== 'N/A' ? (
-                                  <div style={{ fontSize: '0.75rem', color: '#fff', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <Mail size={10} style={{ color: 'var(--gold-primary)' }} /> {email}
-                                  </div>
-                                ) : (
-                                  <div style={{ fontSize: '0.7rem', color: '#ff6b6b', fontStyle: 'italic' }}>Email missing</div>
-                                )}
-                                {phone && phone !== 'N/A' && <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <Phone size={10} /> {phone}
-                                </div>}
-                              </td>
-                              <td style={tdStyle}>
-                                <div style={{
-                                  display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px',
-                                  background: rating.bg, color: rating.color, border: `1px solid ${rating.color}44`, fontWeight: 800, fontSize: '0.68rem', letterSpacing: '0.5px'
-                                }}>
-                                  <Zap size={10} fill="currentColor" /> {rating.label}
-                                </div>
-                              </td>
-                              <td style={tdStyle}>
-                                <div style={{ fontSize: '1rem', fontWeight: 800, color: '#fff' }}>{score}%</div>
-                                <div style={{ width: '60px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '4px', position: 'relative' }}>
-                                  <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${score}%`, background: rating.color, borderRadius: '2px' }} />
-                                </div>
-                              </td>
-                              <td style={{ ...tdStyle, width: '400px', padding: '1rem' }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                  {/* Evidence */}
-                                  <div>
-                                    <div style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--gold-primary)', textTransform: 'uppercase', marginBottom: '4px' }}>Signal Evidence</div>
-                                    <div style={{ fontSize: '0.78rem', color: '#e0e0e0', lineHeight: 1.4, background: 'rgba(212,175,55,0.06)', padding: '6px', borderRadius: '6px', borderLeft: '3px solid var(--gold-primary)' }}>
-                                      {lead['Signal Evidence'] || lead.signal_evidence || 'No direct evidence captured. Auto-scored based on tech detection.'}
-                                    </div>
-                                  </div>
-                                  {/* Process */}
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                    <div>
-                                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>Current Process</div>
-                                      <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px' }}>
-                                        {lead['Current Process'] || lead.current_process || 'Manual handling…'}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase' }}>After Chatbot</div>
-                                      <div style={{ fontSize: '0.72rem', color: 'rgba(57,255,20,0.8)', marginTop: '2px' }}>
-                                        {lead['After Chatbot'] || lead.after_chatbot || 'Real-time automation…'}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {filteredScored.length === 0 && (
-                      <div style={{ padding: '3rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', marginTop: '1rem' }}>
-                        <Database size={30} style={{ color: 'rgba(255,255,255,0.1)', marginBottom: '1rem' }} />
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                          No leads found matching your criteria. Try adjusting the score slider or run a fresh scrape.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              <div className="pi-mobile-leads">
-                {filteredScored.map((lead, idx) => {
-                  const name = lead['Business Name'] || lead['business_name'] || '—';
-                  const industry = lead['Industry'] || lead['industry'] || '—';
-                  const email = lead['Email'] || lead['email'] || '';
-                  const phone = lead['Phone'] || lead['phone'] || '';
-                  const website = lead['Website'] || lead['website'] || '';
-                  const isSelected = selectedLeads.has(idx);
-                  return (
-                    <div key={idx} className={`pi-lead-card${isSelected ? ' pi-lead-card--selected' : ''}`}>
-                      <div className="pi-lead-card-top">
-                        <label className="pi-lead-check">
-                          <input type="checkbox" checked={isSelected} onChange={e => {
-                            const ns = new Set(selectedLeads);
-                            e.target.checked ? ns.add(idx) : ns.delete(idx);
-                            setSelectedLeads(ns);
-                          }} />
-                        </label>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="pi-lead-name">{name}</div>
-                          <div className="pi-lead-meta">{industry}</div>
-                        </div>
-                        <ConfBadge score={lead._overall} />
-                      </div>
-                      {(email || phone) && (
-                        <div className="pi-lead-contact">
-                          {email && email !== 'N/A' && <span>✉ {email}</span>}
-                          {phone && phone !== 'N/A' && <span>☎ {phone}</span>}
-                        </div>
-                      )}
-                      {website && website !== 'N/A' && (
-                        <a href={website} target="_blank" rel="noopener noreferrer" className="pi-lead-website">
-                          <Globe size={10} /> {website.replace(/^https?:\/\//, '').slice(0, 40)}
-                        </a>
-                      )}
-                      <div className="pi-lead-scores">
-                        {painTitles.map((pt, pi) => {
-                          const pData = lead._perPainPoint?.[pt] || {};
-                          const score = pData.score || 0;
-                          const evidence = pData.evidence || '';
-                          const cc2 = getConfColor(score);
-                          return (
-                            <div key={pi} className="pi-lead-score-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span className="pi-lead-score-label" title={pt}>{pt}</span>
-                                <span style={{ color: cc2.text, fontWeight: 700, fontSize: '0.78rem' }}>{score}%</span>
-                              </div>
-                              {evidence && score > 0 && (
-                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: '4px 8px', borderRadius: '4px', borderLeft: `2px solid ${cc2.text}`, width: '100%' }}>
-                                  {evidence}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* Transformation Logic */}
-                      {(lead['Current Process'] || lead['After Chatbot']) && (
-                        <div className="pi-lead-transformation" style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(212,175,55,0.05)', borderRadius: '8px', border: '1px solid rgba(212,175,55,0.1)' }}>
-                          <div style={{ display: 'flex', gap: '10px' }}>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700 }}>Current Process</div>
-                              <div style={{ fontSize: '0.78rem', color: '#ff6b6b' }}>{lead['Current Process'] || 'Manual & inefficient workflows.'}</div>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', color: 'var(--gold-primary)' }}><ChevronRight size={16} /></div>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--gold-primary)', marginBottom: '4px', fontWeight: 700 }}>After Chatbot</div>
-                              <div style={{ fontSize: '0.78rem', color: '#39ff14' }}>{lead['After Chatbot'] || 'AI-optimized automation.'}</div>
+                {isExp && (
+                  <div style={{ padding: '0.75rem 1rem 1rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    {(plan.checks || []).map((chk, ci) => {
+                      const dc = diffColor[chk.difficulty] || '#888';
+                      const autoCheck = chk.auto_checkable === true || ['live_chat', 'booking', 'contact_form', 'meta_pixel', 'google_analytics', 'cms'].includes(chk.signal_type);
+                      return (
+                        <div key={ci} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '0.65rem 0.85rem', marginBottom: ci < plan.checks.length - 1 ? '0.5rem' : 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '6px' }}>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#fff' }}>{chk.check_name}</span>
+                            <div style={{ display: 'flex', gap: '5px' }}>
+                              <span style={{ fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 6px', borderRadius: '8px', background: `${dc}15`, color: dc, border: `1px solid ${dc}33` }}>{chk.difficulty}</span>
+                              {autoCheck
+                                ? <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '1px 6px', borderRadius: '8px', background: 'rgba(57,255,20,0.1)', color: '#39ff14', border: '1px solid rgba(57,255,20,0.25)' }}>AUTO ✓</span>
+                                : <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '1px 6px', borderRadius: '8px', background: 'rgba(255,223,0,0.1)', color: '#ffdf00', border: '1px solid rgba(255,223,0,0.25)' }}>MANUAL</span>
+                              }
                             </div>
                           </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.75rem' }}>
+                            <div><span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Where: </span><span style={{ color: '#e0e0e0' }}>{chk.where_to_look}</span></div>
+                            <div><span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Search: </span><span style={{ color: '#e0e0e0' }}>{chk.what_to_search}</span></div>
+                          </div>
+                          <div style={{ marginTop: '5px', display: 'flex', gap: '5px', alignItems: 'flex-start', background: 'rgba(57,255,20,0.04)', border: '1px solid rgba(57,255,20,0.12)', borderRadius: '5px', padding: '0.35rem 0.55rem' }}>
+                            <CheckCircle size={10} style={{ color: '#39ff14', marginTop: '2px', flexShrink: 0 }} />
+                            <div style={{ fontSize: '0.72rem', color: '#86efac' }}><strong style={{ color: '#39ff14' }}>Confirmed if:</strong> {chk.confirmed_if}</div>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {filteredScored.length === 0 && (
-                  <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    No leads above {confThreshold}% confidence.
+                      );
+                    })}
                   </div>
                 )}
               </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sub-tab 3: Lead Extraction ────────────────────────────────────────────────
+const SOURCES = ['Google Maps', 'Yellow Pages', 'Companies House UK', 'Bark.com', 'LinkedIn', 'Facebook Business'];
+
+function LeadExtractionTab({ onDone, existingLeads }) {
+  const [industry, setIndustry] = useState('');
+  const [location, setLocation] = useState('');
+  const [numLeads, setNumLeads] = useState(20);
+  const [sources, setSources] = useState(['Google Maps']);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [leads, setLeads] = useState(existingLeads || []);
+  const [sourceResults, setSourceResults] = useState({});
+  const [sessionId, setSessionId] = useState('');
+  const pollRef = useRef(null);
+
+  const extract = async () => {
+    if (!industry.trim() || !location.trim()) return;
+    setLoading(true);
+    setError('');
+    setLeads([]);
+    setSourceResults({});
+    try {
+      const res = await axios.post(`${API}/prospect-intel/v2/extract-leads`, {
+        industry: industry.trim(),
+        location: location.trim(),
+        num_leads: numLeads,
+        sources,
+      });
+      const sid = res.data.session_id;
+      setSessionId(sid);
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await axios.get(`${API}/prospect-intel/v2/extract-leads/status/${sid}`);
+          if (st.data.done) {
+            clearInterval(pollRef.current);
+            setLoading(false);
+            setLeads(st.data.leads || []);
+            setSourceResults(st.data.source_results || {});
+            onDone(st.data.leads || [], sid);
+          }
+        } catch {
+          clearInterval(pollRef.current);
+          setLoading(false);
+          setError('Lost connection while polling. Refresh to check results.');
+        }
+      }, 3000);
+    } catch (e) {
+      setLoading(false);
+      setError(e?.response?.data?.detail || e?.message || 'Lead extraction failed');
+    }
+  };
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const exportCSV = () => {
+    const headers = ['Business Name', 'Website', 'Phone', 'Email', 'Rating', 'Reviews', 'Category', 'Location', 'Source', 'Duplicate?'];
+    const rows = leads.map(l => [l.business_name, l.website, l.phone, l.email, l.rating, l.review_count, l.category, l.location, l.source, l.is_duplicate ? 'Yes' : 'No']);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `pi_leads_${Date.now()}.csv`; a.click();
+  };
+
+  const unique = leads.filter(l => !l.is_duplicate).length;
+  const dups = leads.filter(l => l.is_duplicate).length;
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--gold-primary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Industry <span style={{ color: '#ff6b6b' }}>*</span></label>
+            <input value={industry} onChange={e => setIndustry(e.target.value)} placeholder="e.g. restaurants, dental, real estate" style={{ width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Location <span style={{ color: '#ff6b6b' }}>*</span></label>
+            <input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. London UK, New York NY" style={{ width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Max Leads</label>
+            <input type="number" value={numLeads} onChange={e => setNumLeads(Number(e.target.value))} min={5} max={100} style={{ width: '100px' }} />
+          </div>
+        </div>
+
+        <div style={{ marginTop: '1rem' }}>
+          <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sources</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {SOURCES.map(src => {
+              const sel = sources.includes(src);
+              const automated = ['Google Maps', 'Yellow Pages', 'Companies House UK'].includes(src);
+              return (
+                <button key={src} type="button" onClick={() => setSources(prev => sel ? prev.filter(s => s !== src) : [...prev, src])}
+                  style={{
+                    margin: 0, width: 'auto', padding: '5px 12px', borderRadius: '20px', fontSize: '0.78rem', fontWeight: sel ? 700 : 400,
+                    background: sel ? 'rgba(57,255,20,0.1)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${sel ? 'rgba(57,255,20,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                    color: sel ? '#39ff14' : 'var(--text-muted)',
+                    cursor: 'pointer', transform: 'none', boxShadow: 'none', textTransform: 'none', letterSpacing: 0,
+                  }}>
+                  {src} {!automated && <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(manual)</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ marginTop: '1rem', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button onClick={extract} disabled={loading || !industry.trim() || !location.trim()}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#39ff14', color: '#000', fontWeight: 800, border: 'none', padding: '0.75rem 1.5rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0 }}>
+            {loading ? <Loader size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
+            {loading ? 'Extracting...' : 'Extract Leads'}
+          </button>
+          {leads.length > 0 && (
+            <button onClick={exportCSV} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.75rem 1rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0, fontSize: '0.82rem' }}>
+              <Download size={13} /> Export CSV
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', color: '#ff6b6b', marginBottom: '1rem', fontSize: '0.85rem' }}>
+          {error}
+        </div>
+      )}
+
+      {loading && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
+          <Loader size={28} className="animate-spin" style={{ color: '#39ff14' }} />
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Scraping leads and hunting emails...</span>
+          <span style={{ fontSize: '0.78rem', color: 'rgba(57,255,20,0.5)' }}>This may take 1–3 minutes depending on sources</span>
+        </div>
+      )}
+
+      {Object.keys(sourceResults).length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          {Object.entries(sourceResults).map(([src, r]) => (
+            <div key={src} style={{
+              background: r.status === 'success' ? 'rgba(57,255,20,0.06)' : 'rgba(255,107,107,0.06)',
+              border: `1px solid ${r.status === 'success' ? 'rgba(57,255,20,0.2)' : 'rgba(255,107,107,0.2)'}`,
+              borderRadius: '8px', padding: '6px 12px',
+            }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: r.status === 'success' ? '#39ff14' : '#ff6b6b' }}>{src}: {r.count} leads</div>
+              {r.status !== 'success' && <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{r.status}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {leads.length > 0 && !loading && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--gold-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Target size={15} /> {leads.length} Leads
+              <span style={{ fontSize: '0.7rem', color: '#39ff14', fontWeight: 600 }}>{unique} unique</span>
+              {dups > 0 && <span style={{ fontSize: '0.7rem', color: '#ffdf00', fontWeight: 600 }}>{dups} flagged duplicates</span>}
+            </h3>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <thead>
+                <tr style={{ background: '#141417' }}>
+                  {['Business', 'Website', 'Phone', 'Email', 'Rating', 'Category', 'Source', 'Status'].map(h => (
+                    <th key={h} style={{ padding: '0.6rem 0.85rem', textAlign: 'left', color: 'var(--gold-primary)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.6px', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(212,175,55,0.2)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((l, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: l.is_duplicate ? 'rgba(255,223,0,0.03)' : 'transparent' }}>
+                    <td style={{ padding: '0.55rem 0.85rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap' }}>{l.business_name || '—'}</td>
+                    <td style={{ padding: '0.55rem 0.85rem' }}>
+                      {l.website && l.website !== 'N/A' ? (
+                        <a href={l.website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--gold-secondary)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '3px', textDecoration: 'none' }}>
+                          <Globe size={10} /> {l.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].slice(0, 25)}
+                        </a>
+                      ) : <span style={{ color: '#555' }}>—</span>}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)' }}>{l.phone || '—'}</td>
+                    <td style={{ padding: '0.55rem 0.85rem' }}>
+                      {l.email ? <span style={{ color: '#a7f3d0', fontSize: '0.75rem' }}>{l.email}</span> : <span style={{ color: '#555', fontSize: '0.72rem', fontStyle: 'italic' }}>not found</span>}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.85rem', color: l.rating ? '#ffdf00' : '#555' }}>
+                      {l.rating ? <><Star size={10} style={{ verticalAlign: 'middle' }} /> {l.rating}</> : '—'}
+                    </td>
+                    <td style={{ padding: '0.55rem 0.85rem', color: 'var(--text-muted)', fontSize: '0.72rem' }}>{l.category || '—'}</td>
+                    <td style={{ padding: '0.55rem 0.85rem' }}>
+                      <span style={{ background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', fontSize: '0.62rem', padding: '1px 6px', borderRadius: '8px' }}>{l.source}</span>
+                    </td>
+                    <td style={{ padding: '0.55rem 0.85rem' }}>
+                      {l.is_duplicate
+                        ? <span style={{ fontSize: '0.62rem', color: '#ffdf00', background: 'rgba(255,223,0,0.1)', border: '1px solid rgba(255,223,0,0.25)', padding: '1px 6px', borderRadius: '8px' }}>duplicate</span>
+                        : <span style={{ fontSize: '0.62rem', color: '#39ff14', background: 'rgba(57,255,20,0.08)', border: '1px solid rgba(57,255,20,0.2)', padding: '1px 6px', borderRadius: '8px' }}>unique</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!leads.length && !loading && (
+        <div style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.5 }}>
+          <Target size={40} style={{ color: '#39ff14', marginBottom: '1rem', opacity: 0.3 }} />
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Enter industry and location above to extract leads from live sources.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sub-tab 4: Signal Analyzer ────────────────────────────────────────────────
+function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [analyzed, setAnalyzed] = useState([]);
+  const [sessionId, setSessionId] = useState('');
+  const [progress, setProgress] = useState({ current: 0, total: 0, msg: '' });
+  const [expandedLead, setExpandedLead] = useState(null);
+  const [filterScore, setFilterScore] = useState(0);
+  const [filterPain, setFilterPain] = useState('all');
+  const [filterDM, setFilterDM] = useState('all');
+  const [outreachStatus, setOutreachStatus] = useState({});
+  const pollRef = useRef(null);
+  const autoRunRef = useRef(false);
+
+  const runAnalysis = async () => {
+    if (!leads.length || !signalPlans.length) return;
+    setLoading(true);
+    setError('');
+    setAnalyzed([]);
+    setProgress({ current: 0, total: leads.length, msg: 'Starting...' });
+    try {
+      const res = await axios.post(`${API}/prospect-intel/v2/analyze`, {
+        leads,
+        signal_plans: signalPlans,
+        technology: technology || '',
+        industry: industry || '',
+      });
+      const sid = res.data.session_id;
+      setSessionId(sid);
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await axios.get(`${API}/prospect-intel/v2/analyze/status/${sid}`);
+          setProgress({ current: st.data.current || 0, total: st.data.total || leads.length, msg: st.data.progress });
+          if (st.data.leads?.length) setAnalyzed(st.data.leads);
+          if (st.data.done) {
+            clearInterval(pollRef.current);
+            setLoading(false);
+            setAnalyzed(st.data.leads || []);
+            onDone(st.data.leads || []);
+          }
+        } catch {
+          clearInterval(pollRef.current);
+          setLoading(false);
+        }
+      }, 2500);
+    } catch (e) {
+      setLoading(false);
+      setError(e?.response?.data?.detail || e?.message || 'Analysis failed');
+    }
+  };
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+  useEffect(() => {
+    if (leads.length && signalPlans.length && !analyzed.length && !autoRunRef.current) {
+      autoRunRef.current = true;
+      runAnalysis();
+    }
+  }, [leads, signalPlans]);
+
+  const painTitles = [...new Set(signalPlans.map(p => p.pain_point_title || p.pain_point || '').filter(Boolean))];
+  const dmOptions = [...new Set(analyzed.map(l => l.decision_maker).filter(Boolean))];
+
+  const filtered = analyzed.filter(l => {
+    if (l.signal_score < filterScore) return false;
+    if (filterDM !== 'all' && l.decision_maker !== filterDM) return false;
+    return true;
+  });
+
+  const exportCSV = () => {
+    const headers = ['Business', 'Website', 'Phone', 'Email', 'Score', 'Confirmed Checks', 'Checkable Checks', 'Decision Maker', 'Current Process', 'After Tech', 'Outreach Status'];
+    const rows = filtered.map(l => [
+      l.business_name, l.website, l.phone, l.email,
+      l.signal_score, l.confirmed_checks, l.total_checkable,
+      l.decision_maker, l.current_process, l.after_chatbot,
+      outreachStatus[l.business_name] || l.outreach_status,
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `pi_analyzed_${Date.now()}.csv`; a.click();
+  };
+
+  const OUTREACH_OPTIONS = ['not_contacted', 'email_sent', 'called', 'meeting_booked', 'not_interested'];
+
+  const noData = !leads.length || !signalPlans.length;
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--gold-primary)' }}>Signal Analyzer</div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {noData
+                ? 'Complete Sub-tabs 2 (Signal Plans) and 3 (Lead Extraction) first'
+                : `${leads.length} leads × ${signalPlans.length} signal plans → real HTTP checks per lead`}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {!noData && (
+              <button onClick={runAnalysis} disabled={loading}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(212,175,55,0.15)', color: 'var(--gold-primary)', border: '1px solid rgba(212,175,55,0.35)', padding: '0.6rem 1.1rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0, fontSize: '0.82rem', fontWeight: 700 }}>
+                {loading ? <Loader size={13} className="animate-spin" /> : <Activity size={13} />}
+                {analyzed.length ? 'Re-analyze' : 'Run Analysis'}
+              </button>
+            )}
+            {analyzed.length > 0 && (
+              <button onClick={exportCSV} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', padding: '0.6rem 1rem', borderRadius: '8px', cursor: 'pointer', width: 'auto', margin: 0, fontSize: '0.82rem' }}>
+                <Download size={13} /> Export CSV
+              </button>
+            )}
+          </div>
+        </div>
+        {loading && (
+          <div style={{ marginTop: '0.75rem' }}>
+            <ProgressBar current={progress.current} total={progress.total} label={progress.msg} />
+            <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+              Each lead: real HTTP request to website → HTML parsed for chat widgets, forms, pixels, CMS
+            </div>
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ background: 'rgba(220,53,69,0.1)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', color: '#ff6b6b', marginBottom: '1rem', fontSize: '0.85rem' }}>
+          {error}
+        </div>
+      )}
+
+      {noData && !loading && (
+        <div style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.5 }}>
+          <BarChart2 size={40} style={{ color: 'var(--gold-primary)', marginBottom: '1rem', opacity: 0.3 }} />
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '400px', margin: '0 auto' }}>Complete Sub-tab 2 (signal plans) and Sub-tab 3 (lead extraction) first. This tab runs automatically when both are ready.</p>
+        </div>
+      )}
+
+      {analyzed.length > 0 && (
+        <>
+          {/* Filters */}
+          <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Filter size={13} style={{ color: 'var(--text-muted)' }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Min score:</span>
+              <input type="range" min={0} max={100} value={filterScore} onChange={e => setFilterScore(Number(e.target.value))} style={{ width: '80px', accentColor: 'var(--gold-primary)' }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--gold-primary)', fontWeight: 700, minWidth: '32px' }}>{filterScore}%</span>
+            </div>
+            {dmOptions.length > 0 && (
+              <select value={filterDM} onChange={e => setFilterDM(e.target.value)}
+                style={{ height: '30px', fontSize: '0.75rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: 'var(--text-main)', borderRadius: '6px', padding: '0 8px' }}>
+                <option value="all">All Decision Makers</option>
+                {dmOptions.map((dm, i) => <option key={i} value={dm}>{dm}</option>)}
+              </select>
+            )}
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+              Showing {filtered.length} of {analyzed.length} leads
+            </span>
+          </div>
+
+          {/* Results table */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {filtered.map((lead, i) => {
+              const isExpanded = expandedLead === i;
+              const sc = scoreColor(lead.signal_score);
+              const fetchOk = lead.website_fetch_status === 'success';
+              return (
+                <div key={i} className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${sc.border}` }}>
+                  {/* Lead header row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: '1rem', padding: '0.85rem 1rem', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.9rem' }}>{lead.business_name || '—'}</div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px', flexWrap: 'wrap' }}>
+                        {lead.website && lead.website !== 'N/A' && (
+                          <a href={lead.website} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', color: 'var(--gold-secondary)', display: 'flex', alignItems: 'center', gap: '2px', textDecoration: 'none' }}>
+                            <Globe size={9} /> {lead.website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].slice(0, 30)}
+                          </a>
+                        )}
+                        <span style={{ fontSize: '0.62rem', color: fetchOk ? '#39ff14' : '#ff6b6b', background: fetchOk ? 'rgba(57,255,20,0.08)' : 'rgba(255,107,107,0.08)', padding: '0px 5px', borderRadius: '6px', border: `1px solid ${fetchOk ? 'rgba(57,255,20,0.2)' : 'rgba(255,107,107,0.2)'}` }}>
+                          {fetchOk ? '✓ website fetched' : 'website: ' + (lead.website_fetch_status || 'not checked').slice(0, 40)}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        {lead.phone && <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}><Phone size={9} />{lead.phone}</span>}
+                        {lead.email && <span style={{ fontSize: '0.7rem', color: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '3px' }}><Mail size={9} />{lead.email}</span>}
+                      </div>
+                    </div>
+
+                    <div>
+                      <ScoreBadge score={lead.signal_score} />
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {lead.confirmed_checks}/{lead.total_checkable} auto-checks confirmed
+                      </div>
+                      {lead.total_checks - lead.total_checkable > 0 && (
+                        <div style={{ fontSize: '0.6rem', color: '#888' }}>
+                          +{lead.total_checks - lead.total_checkable} manual (excluded from score)
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      {lead.decision_maker && (
+                        <div style={{ background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.18)', borderRadius: '6px', padding: '4px 8px' }}>
+                          <div style={{ fontSize: '0.58rem', color: '#60a5fa', textTransform: 'uppercase', fontWeight: 700 }}>Contact</div>
+                          <div style={{ fontSize: '0.75rem', color: '#fff', fontWeight: 600 }}>{lead.decision_maker}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <select value={outreachStatus[lead.business_name] || lead.outreach_status}
+                        onChange={e => setOutreachStatus(prev => ({ ...prev, [lead.business_name]: e.target.value }))}
+                        style={{ fontSize: '0.72rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: 'var(--text-main)', borderRadius: '6px', padding: '3px 6px', width: '100%' }}>
+                        {OUTREACH_OPTIONS.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+                      </select>
+                    </div>
+
+                    <button onClick={() => setExpandedLead(isExpanded ? null : i)}
+                      style={{ all: 'unset', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.02)', whiteSpace: 'nowrap' }}>
+                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                      {isExpanded ? 'Collapse' : 'Evidence'}
+                    </button>
+                  </div>
+
+                  {/* Expanded: signal evidence + process */}
+                  {isExpanded && (
+                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '1rem', background: 'rgba(0,0,0,0.2)' }}>
+                      {/* Tech detected summary */}
+                      {lead.tech_detected && Object.values(lead.tech_detected).some(v => v && (Array.isArray(v) ? v.length > 0 : v)) && (
+                        <div style={{ marginBottom: '1rem', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700, alignSelf: 'center' }}>Detected:</span>
+                          {lead.tech_detected.live_chat?.map(t => <span key={t} style={{ fontSize: '0.65rem', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', padding: '1px 7px', borderRadius: '8px' }}>{t}</span>)}
+                          {lead.tech_detected.booking?.map(t => <span key={t} style={{ fontSize: '0.65rem', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa', padding: '1px 7px', borderRadius: '8px' }}>{t}</span>)}
+                          {lead.tech_detected.cms?.map(t => <span key={t} style={{ fontSize: '0.65rem', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24', padding: '1px 7px', borderRadius: '8px' }}>{t}</span>)}
+                          {lead.tech_detected.meta_pixel && <span style={{ fontSize: '0.65rem', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#3b82f6', padding: '1px 7px', borderRadius: '8px' }}>Meta Pixel</span>}
+                          {lead.tech_detected.google_analytics && <span style={{ fontSize: '0.65rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', padding: '1px 7px', borderRadius: '8px' }}>Google Analytics</span>}
+                        </div>
+                      )}
+
+                      {/* Signal checks */}
+                      <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--gold-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                          Signal Checks ({lead.confirmed_checks} confirmed / {lead.total_checkable} auto-checked / {lead.total_checks} total)
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                          {(lead.signal_evidence || []).map((chk, ci) => (
+                            <div key={ci} style={{
+                              display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '0.5rem 0.75rem', borderRadius: '6px',
+                              background: chk.confirmed === 'yes' ? 'rgba(57,255,20,0.04)' : chk.confirmed === 'no' ? 'rgba(255,107,107,0.04)' : 'rgba(80,80,80,0.08)',
+                              border: `1px solid ${chk.confirmed === 'yes' ? 'rgba(57,255,20,0.12)' : chk.confirmed === 'no' ? 'rgba(255,107,107,0.12)' : 'rgba(80,80,80,0.15)'}`,
+                            }}>
+                              <div style={{ flexShrink: 0, marginTop: '1px' }}><ConfirmBadge confirmed={chk.confirmed} /></div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: '0.78rem', color: '#e0e0e0', fontWeight: 600 }}>{chk.check_name}</div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  <span style={{ color: '#888', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Evidence: </span>
+                                  {chk.evidence}
+                                </div>
+                                {chk.confirmed === 'unable_to_check' && chk.where_to_look && (
+                                  <div style={{ fontSize: '0.68rem', color: '#60a5fa', marginTop: '3px' }}>→ {chk.where_to_look}</div>
+                                )}
+                              </div>
+                              <span style={{ fontSize: '0.6rem', color: '#555', flexShrink: 0 }}>{chk.signal_type}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Process transformation */}
+                      {(lead.current_process || lead.after_chatbot) && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '10px', alignItems: 'center', background: 'rgba(212,175,55,0.04)', border: '1px solid rgba(212,175,55,0.12)', borderRadius: '8px', padding: '0.75rem' }}>
+                          <div>
+                            <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: '4px' }}>Current Process</div>
+                            <div style={{ fontSize: '0.8rem', color: '#ff6b6b' }}>{lead.current_process || 'Manual process in place'}</div>
+                          </div>
+                          <ChevronRight size={16} style={{ color: 'var(--gold-primary)' }} />
+                          <div>
+                            <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: 'var(--gold-primary)', fontWeight: 700, marginBottom: '4px' }}>After Implementation</div>
+                            <div style={{ fontSize: '0.8rem', color: '#39ff14' }}>{lead.after_chatbot || 'Automated workflow'}</div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {filtered.length === 0 && (
+            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+              No leads above {filterScore}% score. Lower the threshold or re-run analysis.
             </div>
           )}
         </>
       )}
-
-      {/* EMPTY STATE */}
-      {!data && !loading && (
-        <div className="pi-empty-state" style={{ padding: '4rem 2rem', textAlign: 'center', opacity: 0.6 }}>
-          <Zap size={48} style={{ color: 'var(--gold-primary)', marginBottom: '1rem', opacity: 0.3 }} />
-          <h4 style={{ color: 'var(--text-main)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>Enter a technology or keyword above</h4>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '400px', margin: '0 auto' }}>
-            AI will generate a custom signal detection plan, identify lead sources, and scan for pain points automatically.
-          </p>
-        </div>
-      )}
     </div>
   );
 }
 
-// ── Table styles ──────────────────────────────────────────────────────────────
-const thStyle = {
-  padding: '0.7rem 0.85rem', background: '#141417', color: 'var(--gold-primary)',
-  fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.8px',
-  borderBottom: '2px solid rgba(212,175,55,0.2)', textAlign: 'left', whiteSpace: 'nowrap',
-  position: 'sticky', top: 0, zIndex: 5
-};
-const tdStyle = {
-  padding: '0.65rem 0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)',
-  fontSize: '0.82rem', color: 'var(--text-main)', verticalAlign: 'top'
-};
+// ── Main component ────────────────────────────────────────────────────────────
+export default function ProspectIntelligence() {
+  const [activeTab, setActiveTab] = useState(0);
 
-// ── Mini signal card (compact version for Section 2) ─────────────────────────
-function MiniSignalCard({ sig, accent }) {
+  // Cross-tab data
+  const [painData, setPainData] = useState(null);       // tab 1 → tab 2
+  const [signalPlans, setSignalPlans] = useState([]);   // tab 2 → tab 4
+  const [extractedLeads, setExtractedLeads] = useState([]); // tab 3 → tab 4
+  const [leadsSessionId, setLeadsSessionId] = useState('');
+  const [analyzedLeads, setAnalyzedLeads] = useState([]); // tab 4 output
+
+  const readiness = [
+    Boolean(painData?.pain_points?.length),
+    Boolean(signalPlans.length),
+    Boolean(extractedLeads.length),
+    Boolean(analyzedLeads.length),
+  ];
+
+  const handlePainDone = (data) => {
+    setPainData(data);
+    // Auto-navigate to signal plans
+    setTimeout(() => setActiveTab(1), 400);
+  };
+
+  const handleLeadsDone = (leads, sid) => {
+    setExtractedLeads(leads);
+    setLeadsSessionId(sid);
+    if (signalPlans.length) {
+      setTimeout(() => setActiveTab(3), 400);
+    }
+  };
+
+  const handleSignalsDone = (plans) => {
+    setSignalPlans(plans);
+    if (extractedLeads.length) {
+      setTimeout(() => setActiveTab(3), 400);
+    }
+  };
+
   return (
-    <div style={{ background: `${accent}08`, border: `1px solid ${accent}1a`, borderRadius: '7px', padding: '0.6rem 0.75rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px', marginBottom: '0.35rem' }}>
-        <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start', flex: 1 }}>
-          <Eye size={11} style={{ color: accent, marginTop: '2px', flexShrink: 0 }} />
-          <span style={{ fontSize: '0.79rem', color: '#e0e0e0', lineHeight: 1.4 }}>{sig.signal}</span>
-        </div>
-        {sig.weight != null && (
-          <span style={{ fontSize: '0.65rem', fontWeight: 800, color: accent, background: `${accent}18`, padding: '1px 6px', borderRadius: '10px', border: `1px solid ${accent}33`, flexShrink: 0 }}>
-            {sig.weight}%
-          </span>
-        )}
+    <div className="animate-fade-in" style={{ maxWidth: '100%' }}>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--gold-primary)', marginBottom: '4px' }}>
+          <Zap size={22} /> Prospect Intelligence
+        </h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+          4-step pipeline: pain points → signal plans → lead extraction → real-time signal analysis.
+          Scores are calculated from actual HTTP checks — never fabricated.
+        </p>
       </div>
-      {sig.sources && sig.sources.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingLeft: '16px' }}>
-          {sig.sources.map((src, i) => (
-            <div key={i} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px', padding: '0.35rem 0.55rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#fff' }}>{src.name}</span>
-                <span style={{
-                  fontSize: '0.58rem', fontWeight: 700, textTransform: 'uppercase', padding: '1px 4px', borderRadius: '3px',
-                  background: src.difficulty === 'easy' ? 'rgba(40,167,69,0.15)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.15)' : 'rgba(220,53,69,0.15)',
-                  color: src.difficulty === 'easy' ? '#39ff14' : src.difficulty === 'medium' ? '#ffdf00' : '#ff6b6b',
-                  border: `1px solid ${src.difficulty === 'easy' ? 'rgba(40,167,69,0.3)' : src.difficulty === 'medium' ? 'rgba(255,193,7,0.3)' : 'rgba(220,53,69,0.3)'}`
-                }}>{src.difficulty}</span>
-              </div>
-              <div style={{ display: 'flex', gap: '4px', alignItems: 'flex-start' }}>
-                <Search size={9} style={{ color: '#fbbf24', marginTop: '2px', flexShrink: 0 }} />
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{src.how_to_find}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+
+      <SubTabBar active={activeTab} setActive={setActiveTab} readiness={readiness} />
+
+      {activeTab === 0 && (
+        <PainPointsTab onDone={handlePainDone} existingData={painData} />
       )}
-      {sig.confirmed_if && (
-        <div style={{ paddingLeft: '16px', marginTop: '4px' }}>
-          <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start', background: 'rgba(40,167,69,0.06)', border: '1px solid rgba(40,167,69,0.15)', borderRadius: '5px', padding: '0.35rem 0.55rem' }}>
-            <CheckCircle size={10} style={{ color: '#39ff14', marginTop: '2px', flexShrink: 0 }} />
-            <div>
-              <span style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: '#39ff14', fontWeight: 700, letterSpacing: '0.4px' }}>Confirmed if</span>
-              <div style={{ fontSize: '0.72rem', color: '#a7f3d0', marginTop: '1px', lineHeight: 1.4 }}>{sig.confirmed_if}</div>
-            </div>
-          </div>
-        </div>
+
+      {activeTab === 1 && (
+        <SignalPlansTab
+          painData={painData}
+          onDone={handleSignalsDone}
+          existingPlans={signalPlans.length ? signalPlans : null}
+        />
+      )}
+
+      {activeTab === 2 && (
+        <LeadExtractionTab
+          onDone={handleLeadsDone}
+          existingLeads={extractedLeads}
+        />
+      )}
+
+      {activeTab === 3 && (
+        <SignalAnalyzerTab
+          leads={extractedLeads}
+          signalPlans={signalPlans}
+          technology={painData?.technology || ''}
+          industry={painData?.industry || ''}
+          onDone={setAnalyzedLeads}
+        />
       )}
     </div>
   );
