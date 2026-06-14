@@ -147,6 +147,10 @@ function HistoryPanel({ onLoad }) {
             signal_evidence: typeof r.signal_evidence === 'string'
               ? JSON.parse(r.signal_evidence || '[]')
               : (r.signal_evidence || []),
+            score_reason: r.score_reason || '',
+            extraction_mode: r.extraction_mode || 'leads_first',
+            signal_trigger: r.signal_trigger || '',
+            signal_confirmed: r.signal_confirmed || false,
           }));
         } catch {}
       }
@@ -882,6 +886,13 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
   const [filterPain, setFilterPain] = useState('all');
   const [filterDM, setFilterDM] = useState('all');
   const [outreachStatus, setOutreachStatus] = useState({});
+  const [hotOnly, setHotOnly] = useState(false);
+  const [outreachOpen, setOutreachOpen] = useState(null);
+  const [outreachOffer, setOutreachOffer] = useState('');
+  const [outreachEmail, setOutreachEmail] = useState({ subject: '', body: '' });
+  const [outreachLoading, setOutreachLoading] = useState(false);
+  const [outreachSending, setOutreachSending] = useState(false);
+  const [outreachSent, setOutreachSent] = useState({});
   const pollRef = useRef(null);
   const autoRunRef = useRef(false);
 
@@ -936,6 +947,7 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
 
   const filtered = analyzed
     .filter(l => {
+      if (hotOnly && (l.signal_score || 0) < 70) return false;
       if (l.signal_score < filterScore) return false;
       if (filterDM !== 'all' && l.decision_maker !== filterDM) return false;
       return true;
@@ -1029,6 +1041,18 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                 {dmOptions.map((dm, i) => <option key={i} value={dm}>{dm}</option>)}
               </select>
             )}
+            <button
+              onClick={() => setHotOnly(!hotOnly)}
+              style={{
+                padding: '4px 12px', borderRadius: '6px',
+                border: hotOnly ? '1.5px solid #ef4444' : '1.5px solid #444',
+                background: hotOnly ? 'rgba(239,68,68,0.12)' : 'transparent',
+                color: hotOnly ? '#ef4444' : '#888',
+                cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700
+              }}
+            >
+              🔥 HOT only (≥70%)
+            </button>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
               Showing {filtered.length} of {analyzed.length} leads
             </span>
@@ -1071,6 +1095,11 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                           <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', background: 'rgba(128,128,128,0.1)', border: '1px solid rgba(128,128,128,0.2)', color: '#666', whiteSpace: 'nowrap' }}>Leads First</span>
                         )}
                       </div>
+                      {lead.score_reason && (
+                        <div style={{ fontSize: '0.68rem', color: '#999', marginTop: '3px', fontStyle: 'italic', maxWidth: '220px' }}>
+                          {lead.score_reason}
+                        </div>
+                      )}
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                         {lead.confirmed_checks}/{lead.total_checkable} auto-checks confirmed
                       </div>
@@ -1096,6 +1125,23 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                         style={{ fontSize: '0.72rem', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: 'var(--text-main)', borderRadius: '6px', padding: '3px 6px', width: '100%' }}>
                         {OUTREACH_OPTIONS.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
                       </select>
+                      {lead.email && (lead.signal_score || 0) >= 40 && (
+                        <button
+                          onClick={() => {
+                            setOutreachOpen(outreachOpen === lead.business_name ? null : lead.business_name);
+                            setOutreachEmail({ subject: '', body: '' });
+                          }}
+                          style={{
+                            marginTop: '5px', padding: '4px 10px', width: '100%',
+                            background: outreachOpen === lead.business_name ? '#7c3aed' : 'transparent',
+                            border: '1.5px solid #7c3aed', borderRadius: '6px',
+                            color: outreachOpen === lead.business_name ? '#fff' : '#a78bfa',
+                            cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700
+                          }}
+                        >
+                          ✉ {outreachOpen === lead.business_name ? 'Close' : 'Generate & Send'}
+                        </button>
+                      )}
                     </div>
 
                     <button onClick={() => setExpandedLead(isExpanded ? null : i)}
@@ -1104,6 +1150,76 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                       {isExpanded ? 'Collapse' : 'Evidence'}
                     </button>
                   </div>
+
+                  {/* Outreach panel */}
+                  {outreachOpen === lead.business_name && (
+                    <div style={{ borderTop: '1px solid rgba(124,58,237,0.2)', padding: '1rem', background: 'rgba(124,58,237,0.04)' }}>
+                      <div style={{ fontSize: '0.72rem', color: '#a78bfa', marginBottom: '8px', fontStyle: 'italic' }}>
+                        {lead.score_reason || `${lead.business_name} — Score: ${lead.signal_score}%`}
+                      </div>
+                      <textarea
+                        placeholder="Your offer (e.g. 'AI chatbot that handles bookings 24/7')"
+                        value={outreachOffer}
+                        onChange={e => setOutreachOffer(e.target.value)}
+                        style={{ width: '100%', padding: '8px', background: '#0d0d1a', border: '1px solid #333', borderRadius: '6px', color: '#eee', fontSize: '0.78rem', minHeight: '48px', marginBottom: '8px', boxSizing: 'border-box', resize: 'vertical' }}
+                      />
+                      <button
+                        disabled={outreachLoading}
+                        onClick={async () => {
+                          setOutreachLoading(true);
+                          try {
+                            const res = await axios.post(`${API}/prospect-intel/v2/generate-outreach`, {
+                              lead, technology, industry, user_offer: outreachOffer
+                            });
+                            setOutreachEmail({ subject: res.data.subject || '', body: res.data.body || '' });
+                          } catch (e) { alert('Email generation failed: ' + (e?.response?.data?.detail || e.message)); }
+                          setOutreachLoading(false);
+                        }}
+                        style={{ padding: '6px 14px', background: '#7c3aed', border: 'none', borderRadius: '6px', color: '#fff', cursor: outreachLoading ? 'wait' : 'pointer', fontSize: '0.78rem', fontWeight: 700, marginBottom: '8px' }}
+                      >
+                        {outreachLoading ? 'Generating…' : '✨ Generate Email'}
+                      </button>
+                      {outreachEmail.subject && (
+                        <div>
+                          <input
+                            value={outreachEmail.subject}
+                            onChange={e => setOutreachEmail(prev => ({ ...prev, subject: e.target.value }))}
+                            style={{ width: '100%', padding: '6px', background: '#0d0d1a', border: '1px solid #333', borderRadius: '6px', color: '#eee', fontSize: '0.78rem', marginBottom: '6px', boxSizing: 'border-box' }}
+                            placeholder="Subject"
+                          />
+                          <textarea
+                            value={outreachEmail.body}
+                            onChange={e => setOutreachEmail(prev => ({ ...prev, body: e.target.value }))}
+                            style={{ width: '100%', padding: '8px', background: '#0d0d1a', border: '1px solid #333', borderRadius: '6px', color: '#eee', fontSize: '0.78rem', minHeight: '120px', marginBottom: '8px', boxSizing: 'border-box', resize: 'vertical' }}
+                          />
+                          <button
+                            disabled={outreachSending}
+                            onClick={async () => {
+                              setOutreachSending(true);
+                              try {
+                                const res = await axios.post(`${API}/prospect-intel/v2/send-outreach`, {
+                                  session_id: masterSessionId || '',
+                                  business_name: lead.business_name,
+                                  email: lead.email,
+                                  subject: outreachEmail.subject,
+                                  body: outreachEmail.body,
+                                });
+                                if (res.data.success) {
+                                  setOutreachSent(prev => ({ ...prev, [lead.business_name]: true }));
+                                  setOutreachStatus(prev => ({ ...prev, [lead.business_name]: 'email_sent' }));
+                                  setOutreachOpen(null);
+                                }
+                              } catch (e) { alert('Send failed: ' + (e?.response?.data?.detail || e.message)); }
+                              setOutreachSending(false);
+                            }}
+                            style={{ padding: '6px 14px', background: outreachSent[lead.business_name] ? '#16a34a' : '#2563eb', border: 'none', borderRadius: '6px', color: '#fff', cursor: outreachSending ? 'wait' : 'pointer', fontSize: '0.78rem', fontWeight: 700 }}
+                          >
+                            {outreachSending ? 'Sending…' : outreachSent[lead.business_name] ? '✓ Sent' : '📤 Send Email'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Expanded: signal evidence + process */}
                   {isExpanded && (
@@ -1134,13 +1250,34 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
                             }}>
                               <div style={{ flexShrink: 0, marginTop: '1px' }}><ConfirmBadge confirmed={chk.confirmed} /></div>
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: '0.78rem', color: '#e0e0e0', fontWeight: 600 }}>{chk.check_name}</div>
+                                <div style={{ fontSize: '0.78rem', color: '#e0e0e0', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                                  {chk.check_name}
+                                  {chk.importance_level && (
+                                    <span style={{
+                                      fontSize: '0.58rem', padding: '1px 5px', borderRadius: '8px', fontWeight: 700,
+                                      textTransform: 'uppercase', letterSpacing: '0.4px',
+                                      background: chk.importance_level === 'critical' ? 'rgba(255,77,77,0.13)' : chk.importance_level === 'important' ? 'rgba(245,166,35,0.13)' : 'rgba(136,136,136,0.13)',
+                                      color: chk.importance_level === 'critical' ? '#ff4d4d' : chk.importance_level === 'important' ? '#f5a623' : '#888',
+                                    }}>
+                                      {chk.importance_level}
+                                    </span>
+                                  )}
+                                </div>
                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                                   <span style={{ color: '#888', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Evidence: </span>
                                   {chk.evidence}
                                 </div>
                                 {chk.confirmed === 'unable_to_check' && chk.where_to_look && (
                                   <div style={{ fontSize: '0.68rem', color: '#60a5fa', marginTop: '3px' }}>→ {chk.where_to_look}</div>
+                                )}
+                                {chk.confirmed === 'yes' && chk.outreach_angle && (
+                                  <div style={{
+                                    marginTop: '5px', padding: '4px 8px',
+                                    background: 'rgba(124,58,237,0.1)', borderLeft: '3px solid #7c3aed',
+                                    borderRadius: '0 4px 4px 0', fontSize: '0.68rem', color: '#c4b5fd'
+                                  }}>
+                                    <strong>Pitch:</strong> {chk.outreach_angle}
+                                  </div>
                                 )}
                               </div>
                               <span style={{ fontSize: '0.6rem', color: '#555', flexShrink: 0 }}>{chk.signal_type}</span>
