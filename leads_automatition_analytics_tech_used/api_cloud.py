@@ -6,10 +6,12 @@ All market research, outreach, leads DB read, and Slack features work normally.
 import os
 import re
 import json
+import asyncio
+import urllib.parse
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -17,6 +19,10 @@ import requests as _requests
 
 import db_manager
 from market_research import router as market_router
+
+# Google Maps scraping requires Playwright — not available on Render free tier
+async def scrape_google_maps(url: str, max_results: int = 10):
+    raise RuntimeError("Google Maps scraping unavailable on cloud (requires Playwright)")
 
 app = FastAPI(title="Antigravity Analytics API", version="1.0.0")
 
