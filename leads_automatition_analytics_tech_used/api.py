@@ -1399,16 +1399,46 @@ CREATE TABLE IF NOT EXISTS pi_analyzed (
     website TEXT,
     phone TEXT,
     email TEXT,
+    location TEXT DEFAULT '',
     signal_score INTEGER DEFAULT 0,
     confidence_rate INTEGER DEFAULT 0,
-    signal_evidence JSONB DEFAULT '{}',
+    signal_evidence JSONB DEFAULT '[]',
     current_process TEXT DEFAULT '',
     after_chatbot TEXT DEFAULT '',
     decision_maker TEXT DEFAULT '',
     outreach_status TEXT DEFAULT 'not_contacted',
+    extraction_mode TEXT DEFAULT 'leads_first',
+    signal_trigger TEXT DEFAULT '',
+    signal_source_url TEXT DEFAULT '',
+    signal_confirmed BOOLEAN DEFAULT FALSE,
+    score_reason TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
 );
 """
+
+_PI_ANALYZED_MIGRATIONS = [
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS location TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS extraction_mode TEXT DEFAULT 'leads_first'",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_trigger TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_source_url TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_confirmed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS score_reason TEXT DEFAULT ''",
+]
+
+def _pi_migrate_analyzed():
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        for stmt in _PI_ANALYZED_MIGRATIONS:
+            try:
+                cur.execute(stmt)
+            except Exception:
+                conn.rollback()
+                continue
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_migrate_analyzed] {e}")
 
 _PI_SESSIONS_DDL = """
 CREATE TABLE IF NOT EXISTS pi_sessions (

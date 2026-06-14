@@ -15,11 +15,20 @@ if not DATABASE_URL:
 def get_pg_conn():
     import psycopg2
     import psycopg2.extras
+    import time as _time
     url = DATABASE_URL
     if "sslmode" not in url:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}sslmode=require"
-    return psycopg2.connect(url)
+    last_err = None
+    for attempt in range(3):
+        try:
+            return psycopg2.connect(url)
+        except psycopg2.OperationalError as e:
+            last_err = e
+            if attempt < 2:
+                _time.sleep(1 * (attempt + 1))
+    raise last_err
 
 # Keep alias so any legacy code calling get_db_connection() still works
 def get_db_connection():
