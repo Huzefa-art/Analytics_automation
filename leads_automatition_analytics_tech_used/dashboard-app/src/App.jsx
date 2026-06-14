@@ -562,7 +562,7 @@ function App() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center', justifyContent: 'space-between' }}>
                                 
                                 {/* Left: Selection Fields */}
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', flexGrow: 1, maxWidth: 'calc(100% - 340px)', minWidth: '280px' }}>
+                                <div className="filters-fields" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', flexGrow: 1, maxWidth: 'calc(100% - 340px)', minWidth: '280px' }}>
                                     {/* Search Query Input */}
                                     <div style={{ position: 'relative', flexGrow: 1, minWidth: '200px' }}>
                                         <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />

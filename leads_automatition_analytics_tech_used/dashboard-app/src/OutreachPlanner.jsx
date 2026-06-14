@@ -567,7 +567,7 @@ export default function OutreachPlanner() {
                         {block.raw_text && (!block.signals || block.signals.length === 0) ? (
                           <div style={{ padding: '1rem', fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>{block.raw_text}</div>
                         ) : (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                          <div className="outreach-signals-grid">
                             {/* SIDE 1 */}
                             <div style={{ borderRight: '1px solid rgba(96,165,250,0.12)', padding: '0.85rem 1rem' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.75rem', paddingBottom: '0.5rem', borderBottom: '1px solid rgba(96,165,250,0.12)' }}>
@@ -606,7 +606,7 @@ export default function OutreachPlanner() {
 
       {/* ── MAIN WIZARD (2 columns) ─────────────────────────────────────────── */}
       {selectedCampaign && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '2rem', alignItems: 'start' }}>
+        <div className="outreach-main-grid" style={{ gap: '2rem' }}>
 
           {/* LEFT: Step 2 + Step 3 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -683,7 +683,7 @@ export default function OutreachPlanner() {
                 <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--gold-primary)', display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
                   OR Filters (any match qualifies)
                 </span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <div className="outreach-filters-grid" style={{ gap: '6px' }}>
                   {[
                     { id: 'reqEmail', label: 'Has Email',       checked: requireEmail,     setter: setRequireEmail },
                     { id: 'reqPhone', label: 'Has Phone',       checked: requirePhone,     setter: setRequirePhone },

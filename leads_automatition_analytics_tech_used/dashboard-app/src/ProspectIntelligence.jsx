@@ -69,7 +69,7 @@ function SubTabBar({ active, setActive, readiness }) {
             transition: 'all 0.15s ease', position: 'relative',
           }}>
             <Icon size={14} />
-            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
+            <span className="pi-v2-subtab-label" style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
             {ready && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#39ff14', position: 'absolute', top: '5px', right: '5px' }} />}
           </button>
         );
@@ -125,7 +125,7 @@ function PainPointsTab({ onDone, existingData }) {
   return (
     <div>
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+        <div className="pi-v2-grid-2" style={{ gap: '1rem' }}>
           <div>
             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--gold-primary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Technology / Keyword <span style={{ color: '#ff6b6b' }}>*</span>
@@ -200,7 +200,7 @@ function PainPointsTab({ onDone, existingData }) {
                 <FreqBadge freq={pp.frequency} />
               </div>
               <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.65 }}>{pp.description}</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '0.5rem' }}>
+              <div className="pi-v2-grid-2" style={{ gap: '8px', marginBottom: '0.5rem' }}>
                 <div style={{ background: 'rgba(57,255,20,0.05)', border: '1px solid rgba(57,255,20,0.15)', borderRadius: '7px', padding: '0.55rem 0.75rem' }}>
                   <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#39ff14', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>Revenue Impact</div>
                   <div style={{ fontSize: '0.82rem', color: '#a7f3d0' }}>{pp.revenue_impact}</div>
@@ -363,7 +363,7 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
                               }
                             </div>
                           </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.75rem' }}>
+                          <div className="pi-v2-grid-2" style={{ gap: '6px', fontSize: '0.75rem' }}>
                             <div><span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Where: </span><span style={{ color: '#e0e0e0' }}>{chk.where_to_look}</span></div>
                             <div><span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '0.58rem', fontWeight: 700 }}>Search: </span><span style={{ color: '#e0e0e0' }}>{chk.what_to_search}</span></div>
                           </div>
@@ -453,7 +453,7 @@ function LeadExtractionTab({ onDone, existingLeads }) {
   return (
     <div>
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
+        <div className="pi-v2-grid-1-1-auto" style={{ gap: '1rem' }}>
           <div>
             <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: 'var(--gold-primary)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Industry <span style={{ color: '#ff6b6b' }}>*</span></label>
             <input value={industry} onChange={e => setIndustry(e.target.value)} placeholder="e.g. restaurants, dental, real estate" style={{ width: '100%' }} />
@@ -763,7 +763,7 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone })
               return (
                 <div key={i} className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${sc.border}` }}>
                   {/* Lead header row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: '1rem', padding: '0.85rem 1rem', alignItems: 'center' }}>
+                  <div className="pi-v2-lead-row" style={{ gap: '1rem' }}>
                     <div>
                       <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.9rem' }}>{lead.business_name || '—'}</div>
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '3px', flexWrap: 'wrap' }}>
@@ -864,7 +864,7 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone })
 
                       {/* Process transformation */}
                       {(lead.current_process || lead.after_chatbot) && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '10px', alignItems: 'center', background: 'rgba(212,175,55,0.04)', border: '1px solid rgba(212,175,55,0.12)', borderRadius: '8px', padding: '0.75rem' }}>
+                        <div className="pi-v2-process-grid" style={{ gap: '10px', background: 'rgba(212,175,55,0.04)', border: '1px solid rgba(212,175,55,0.12)', borderRadius: '8px', padding: '0.75rem' }}>
                           <div>
                             <div style={{ fontSize: '0.6rem', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: '4px' }}>Current Process</div>
                             <div style={{ fontSize: '0.8rem', color: '#ff6b6b' }}>{lead.current_process || 'Manual process in place'}</div>

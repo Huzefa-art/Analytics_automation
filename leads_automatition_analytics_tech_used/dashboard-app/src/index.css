@@ -1269,3 +1269,103 @@ textarea:focus {
     padding: 1rem;
   }
 }
+
+/* ─── Responsive grid utility classes ────────────────────────────────────────── */
+
+/* PI v2 (new Prospect Intelligence sub-tabs) */
+.pi-v2-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.pi-v2-grid-1-1-auto {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+}
+
+.pi-v2-lead-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr auto;
+  padding: 0.85rem 1rem;
+  align-items: center;
+}
+
+.pi-v2-process-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+/* OutreachPlanner */
+.outreach-main-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  align-items: start;
+}
+
+.outreach-signals-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.outreach-filters-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* MarketResearch */
+.mr-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* ─── Sidebar-collapse breakpoint overrides ──────────────────────────────────── */
+@media (max-width: 1024px) {
+  .filters-fields {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/* ─── Mobile stacking ────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* PI v2 grids → single column */
+  .pi-v2-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .pi-v2-grid-1-1-auto {
+    grid-template-columns: 1fr;
+  }
+  .pi-v2-lead-row {
+    grid-template-columns: 1fr;
+  }
+  .pi-v2-process-grid {
+    grid-template-columns: 1fr;
+  }
+  /* Hide text labels in sub-tab bar; icons remain */
+  .pi-v2-subtab-label {
+    display: none;
+  }
+
+  /* OutreachPlanner → single column */
+  .outreach-main-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem !important;
+  }
+  .outreach-signals-grid {
+    grid-template-columns: 1fr;
+  }
+  .outreach-signals-grid > div:first-child {
+    border-right: none;
+    border-bottom: 1px solid rgba(96, 165, 250, 0.12);
+  }
+  .outreach-filters-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* MarketResearch → single column */
+  .mr-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}

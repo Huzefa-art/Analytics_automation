@@ -631,7 +631,7 @@ function InvestmentInsightsSection({ industry, problem, insights, insLoading, in
 
             {/* Quick win + biggest risk */}
             {(ins?.quick_win || ins?.biggest_risk) && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div className="mr-grid-2" style={{ gap: '1rem' }}>
                 {ins?.quick_win && (
                   <div style={{ background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.2)',
                     borderRadius: '8px', padding: '0.875rem' }}>
@@ -723,7 +723,7 @@ function InvestmentInsightsSection({ industry, problem, insights, insLoading, in
                           ))}
                         </div>
                       )}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                      <div className="mr-grid-2" style={{ gap: '1rem' }}>
                         {opp.target_user && (
                           <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '0.75rem' }}>
                             <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)',
