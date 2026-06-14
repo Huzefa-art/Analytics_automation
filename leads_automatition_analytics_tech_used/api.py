@@ -1953,34 +1953,31 @@ async def pi_v2_signal_plans(request: PIV2SignalPlansRequest):
         allowed = "Google Maps, Google Reviews, Google Search snippet, Trustpilot, Business website, Yelp, Yellow Pages, Bark.com, Facebook public page (via Google Search snippet only)"
         forbidden = "G2, Capterra, LinkedIn Jobs (B2B platforms), ThomasNet"
 
-    pain_block = "\n".join([f"{i+1}. {pp.get('title','')}: {pp.get('description','')[:200]}"
-                             for i, pp in enumerate(request.pain_points)])
-    prompt = f"""You are a B2B signal intelligence analyst for the {industry} industry.
+    def _build_signal_prompt(pain_subset):
+        pain_block = "\n".join([f"{i+1}. {pp.get('title','')}: {pp.get('description','')[:150]}"
+                                 for i, pp in enumerate(pain_subset)])
+        return f"""You are a B2B signal intelligence analyst for the {industry} industry.
 Technology: {request.technology or "the product"}
 
 PAIN POINTS:
 {pain_block}
 
-For EACH pain point, create a signal detection plan telling a salesperson EXACTLY where to look and what they will find.
+For EACH pain point above, create ONE signal detection plan.
+ALLOWED SOURCES: {allowed}
+FORBIDDEN SOURCES: {forbidden}
 
-ALLOWED SOURCES for {industry}: {allowed}
-FORBIDDEN SOURCES for {industry}: {forbidden}
-
-Return ONLY a valid JSON array:
+Return ONLY a valid JSON array (no markdown, no explanation):
 [
   {{
     "pain_point_title": "exact title from list above",
-    "decision_maker": {{
-      "job_title": "The specific contact when this signal fires",
-      "why": "Why they own this problem in {industry}"
-    }},
+    "decision_maker": {{"job_title": "Specific contact role", "why": "Why they own this"}},
     "checks": [
       {{
-        "check_name": "What you are checking",
-        "where_to_look": "Exact URL format or tool",
-        "what_to_search": "Exact search term or field name",
-        "what_to_check": "Specific HTML element, page section, or visible field",
-        "confirmed_if": "Boolean condition — specific and measurable",
+        "check_name": "What you check",
+        "where_to_look": "Exact URL or tool",
+        "what_to_search": "Exact search term",
+        "what_to_check": "Specific element or field",
+        "confirmed_if": "Boolean condition",
         "difficulty": "easy",
         "signal_type": "live_chat",
         "auto_checkable": true
@@ -1988,30 +1985,51 @@ Return ONLY a valid JSON array:
     ]
   }}
 ]
+signal_type: live_chat|booking|contact_form|meta_pixel|google_analytics|cms|crm|manual_google_search|manual_linkedin|manual_review_check|manual_indeed
+auto_checkable: true ONLY for live_chat, booking, contact_form, meta_pixel, google_analytics, cms
+Generate 3-4 checks per pain point. At least 2 must be auto_checkable."""
 
-signal_type MUST be ONE of: live_chat | booking | contact_form | meta_pixel | google_analytics | cms | crm | manual_google_search | manual_linkedin | manual_review_check | manual_indeed
-auto_checkable: true ONLY for signal_type in [live_chat, booking, contact_form, meta_pixel, google_analytics, cms]
-Generate 4-6 checks per pain point. At least 2 must be auto_checkable: true."""
+    def _call_llm_for_plans(pain_subset):
+        prompt = _build_signal_prompt(pain_subset)
+        for attempt in range(2):
+            raw = nvidia_chat(prompt, max_tokens=2000)
+            clean = (raw or "").strip()
+            if not clean or clean.startswith("NVIDIA API error"):
+                continue  # retry
+            clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
+            clean = _re_pi.sub(r"\s*```$", "", clean)
+            try:
+                result = json.loads(clean)
+                if isinstance(result, list) and result:
+                    return result
+            except json.JSONDecodeError:
+                pass
+        return []
 
     try:
-        raw = nvidia_chat(prompt, max_tokens=4000)
-        clean = raw.strip()
-        clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
-        clean = _re_pi.sub(r"\s*```$", "", clean)
-        signal_plans = json.loads(clean)
-        if not isinstance(signal_plans, list):
-            raise ValueError("Expected JSON array")
+        # Batch in groups of 2 to stay within LLM context limits
+        all_plans = []
+        pain_points = request.pain_points
+        batch_size = 2
+        for i in range(0, len(pain_points), batch_size):
+            batch = pain_points[i:i + batch_size]
+            plans = _call_llm_for_plans(batch)
+            all_plans.extend(plans)
+
+        if not all_plans:
+            raise HTTPException(500, "LLM returned no signal plans. The model may be overloaded — please retry.")
+
         db_manager.save_market_result(
             "pi_signals_v2", industry,
             f"pi_signals_v2:{industry.lower()}:{session_id}",
-            {"signal_plans": signal_plans, "session_id": session_id, "industry": industry}
+            {"signal_plans": all_plans, "session_id": session_id, "industry": industry}
         )
         if session_id:
             _pi_save_session(session_id, request.technology, request.industry or "",
-                             signal_plans=signal_plans)
-        return {"session_id": session_id, "signal_plans": signal_plans}
-    except json.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse signal plans: {str(e)[:200]}")
+                             signal_plans=all_plans)
+        return {"session_id": session_id, "signal_plans": all_plans}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Signal plan generation failed: {str(e)}")
 
