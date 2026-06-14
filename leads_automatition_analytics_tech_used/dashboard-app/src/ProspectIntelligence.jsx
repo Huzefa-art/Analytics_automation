@@ -5,7 +5,7 @@ import {
   Users, CheckCircle, XCircle, HelpCircle, Loader, Download,
   ChevronDown, ChevronUp, ChevronRight, RefreshCw, Play, Mail,
   Phone, LinkIcon, ExternalLink, Filter, TrendingUp, Activity,
-  MapPin, Star, Copy
+  MapPin, Star, Copy, Clock, X
 } from 'lucide-react';
 
 const API = '/api';
@@ -90,6 +90,154 @@ function ProgressBar({ current, total, label }) {
       <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, var(--gold-primary), #ff6b6b)', borderRadius: '3px', transition: 'width 0.3s ease' }} />
       </div>
+    </div>
+  );
+}
+
+// ── History Panel ─────────────────────────────────────────────────────────────
+function HistoryPanel({ onLoad }) {
+  const [open, setOpen] = useState(false);
+  const [sessions, setSessions] = useState([]);
+  const [fetching, setFetching] = useState(false);
+  const [loadingId, setLoadingId] = useState(null);
+  const [error, setError] = useState('');
+
+  const fetchHistory = async () => {
+    setFetching(true);
+    setError('');
+    try {
+      const res = await axios.get(`${API}/prospect-intel/v2/history`);
+      setSessions(res.data || []);
+    } catch (e) {
+      setError('Could not load history');
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && sessions.length === 0) fetchHistory();
+  };
+
+  const loadSession = async (sid) => {
+    setLoadingId(sid);
+    try {
+      const [metaRes] = await Promise.all([
+        axios.get(`${API}/prospect-intel/v2/session/${sid}`),
+      ]);
+      const meta = metaRes.data;
+
+      let leads = [];
+      let analyzed = [];
+
+      if (meta.leads_count > 0) {
+        try {
+          const lr = await axios.get(`${API}/prospect-intel/v2/leads/${sid}`);
+          leads = lr.data.leads || [];
+        } catch {}
+      }
+      if (meta.analyzed_count > 0) {
+        try {
+          const ar = await axios.get(`${API}/prospect-intel/v2/analyzed/${sid}`);
+          // normalize column names from DB to frontend format
+          analyzed = (ar.data.results || []).map(r => ({
+            ...r,
+            signal_evidence: typeof r.signal_evidence === 'string'
+              ? JSON.parse(r.signal_evidence || '[]')
+              : (r.signal_evidence || []),
+          }));
+        } catch {}
+      }
+
+      onLoad(meta, leads, analyzed);
+      setOpen(false);
+    } catch (e) {
+      setError('Failed to load session');
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const fmtDate = (s) => {
+    try { return new Date(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch { return s; }
+  };
+
+  return (
+    <div style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={toggle} style={{
+          all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
+          fontSize: '0.78rem', color: open ? 'var(--gold-primary)' : 'var(--text-muted)',
+          background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+          padding: '5px 12px', borderRadius: '8px', transition: 'all 0.15s',
+        }}>
+          <Clock size={13} /> History {open ? <X size={12} /> : <ChevronDown size={12} />}
+        </button>
+      </div>
+
+      {open && (
+        <div className="card" style={{ marginTop: '0.5rem', padding: '0.75rem 1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--gold-primary)' }}>Previous Sessions</span>
+            <button onClick={fetchHistory} disabled={fetching} style={{ all: 'unset', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem' }}>
+              <RefreshCw size={12} className={fetching ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+
+          {error && <div style={{ color: '#ff6b6b', fontSize: '0.78rem', marginBottom: '0.5rem' }}>{error}</div>}
+
+          {fetching && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '1rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+              <Loader size={14} className="animate-spin" /> Loading history...
+            </div>
+          )}
+
+          {!fetching && sessions.length === 0 && (
+            <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+              No previous sessions found. Complete the pipeline to save history.
+            </div>
+          )}
+
+          {!fetching && sessions.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflowY: 'auto' }}>
+              {sessions.map((s) => (
+                <div key={s.session_id} style={{
+                  display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap',
+                  padding: '0.6rem 0.85rem', borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {s.technology || '(no tech)'}{s.industry ? ` · ${s.industry}` : ''}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>{fmtDate(s.updated_at)}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                    {s.leads_count > 0 && (
+                      <span style={{ fontSize: '0.62rem', background: 'rgba(57,255,20,0.1)', border: '1px solid rgba(57,255,20,0.25)', color: '#39ff14', padding: '1px 7px', borderRadius: '10px' }}>
+                        {s.leads_count} leads
+                      </span>
+                    )}
+                    {s.analyzed_count > 0 && (
+                      <span style={{ fontSize: '0.62rem', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.25)', color: 'var(--gold-primary)', padding: '1px 7px', borderRadius: '10px' }}>
+                        {s.analyzed_count} analyzed
+                      </span>
+                    )}
+                  </div>
+                  <button onClick={() => loadSession(s.session_id)} disabled={loadingId === s.session_id}
+                    style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--gold-primary)', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.3)', padding: '4px 12px', borderRadius: '6px', whiteSpace: 'nowrap' }}>
+                    {loadingId === s.session_id ? <Loader size={11} className="animate-spin" /> : <ChevronRight size={11} />}
+                    Load
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -388,7 +536,7 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
 // ── Sub-tab 3: Lead Extraction ────────────────────────────────────────────────
 const SOURCES = ['Google Maps', 'Yellow Pages', 'Companies House UK', 'Bark.com', 'LinkedIn', 'Facebook Business'];
 
-function LeadExtractionTab({ onDone, existingLeads }) {
+function LeadExtractionTab({ onDone, existingLeads, masterSessionId }) {
   const [industry, setIndustry] = useState('');
   const [location, setLocation] = useState('');
   const [numLeads, setNumLeads] = useState(20);
@@ -412,6 +560,7 @@ function LeadExtractionTab({ onDone, existingLeads }) {
         location: location.trim(),
         num_leads: numLeads,
         sources,
+        session_id: masterSessionId || '',
       });
       const sid = res.data.session_id;
       setSessionId(sid);
@@ -598,7 +747,7 @@ function LeadExtractionTab({ onDone, existingLeads }) {
 }
 
 // ── Sub-tab 4: Signal Analyzer ────────────────────────────────────────────────
-function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone }) {
+function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, masterSessionId }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [analyzed, setAnalyzed] = useState([]);
@@ -624,6 +773,7 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone })
         signal_plans: signalPlans,
         technology: technology || '',
         industry: industry || '',
+        session_id: masterSessionId || '',
       });
       const sid = res.data.session_id;
       setSessionId(sid);
@@ -905,6 +1055,9 @@ export default function ProspectIntelligence() {
   const [leadsSessionId, setLeadsSessionId] = useState('');
   const [analyzedLeads, setAnalyzedLeads] = useState([]); // tab 4 output
 
+  // Derived session ID: use pain data's session, fall back to leads session
+  const piSessionId = painData?.session_id || leadsSessionId;
+
   const readiness = [
     Boolean(painData?.pain_points?.length),
     Boolean(signalPlans.length),
@@ -914,7 +1067,6 @@ export default function ProspectIntelligence() {
 
   const handlePainDone = (data) => {
     setPainData(data);
-    // Auto-navigate to signal plans
     setTimeout(() => setActiveTab(1), 400);
   };
 
@@ -933,17 +1085,33 @@ export default function ProspectIntelligence() {
     }
   };
 
+  const handleHistoryLoad = (meta, leads, analyzed) => {
+    if (meta.pain_data?.pain_points?.length) setPainData(meta.pain_data);
+    if (meta.signal_plans?.length) setSignalPlans(meta.signal_plans);
+    if (leads.length) { setExtractedLeads(leads); setLeadsSessionId(meta.session_id); }
+    if (analyzed.length) setAnalyzedLeads(analyzed);
+    // Navigate to the most complete tab
+    if (analyzed.length) setActiveTab(3);
+    else if (leads.length) setActiveTab(2);
+    else if (meta.signal_plans?.length) setActiveTab(1);
+    else setActiveTab(0);
+  };
+
   return (
     <div className="animate-fade-in" style={{ maxWidth: '100%' }}>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--gold-primary)', marginBottom: '4px' }}>
-          <Zap size={22} /> Prospect Intelligence
-        </h2>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
-          4-step pipeline: pain points → signal plans → lead extraction → real-time signal analysis.
-          Scores are calculated from actual HTTP checks — never fabricated.
-        </p>
+      <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' }}>
+        <div>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--gold-primary)', marginBottom: '4px' }}>
+            <Zap size={22} /> Prospect Intelligence
+          </h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+            4-step pipeline: pain points → signal plans → lead extraction → real-time signal analysis.
+            Scores are calculated from actual HTTP checks — never fabricated.
+          </p>
+        </div>
       </div>
+
+      <HistoryPanel onLoad={handleHistoryLoad} />
 
       <SubTabBar active={activeTab} setActive={setActiveTab} readiness={readiness} />
 
@@ -963,6 +1131,7 @@ export default function ProspectIntelligence() {
         <LeadExtractionTab
           onDone={handleLeadsDone}
           existingLeads={extractedLeads}
+          masterSessionId={piSessionId}
         />
       )}
 
@@ -973,6 +1142,7 @@ export default function ProspectIntelligence() {
           technology={painData?.technology || ''}
           industry={painData?.industry || ''}
           onDone={setAnalyzedLeads}
+          masterSessionId={piSessionId}
         />
       )}
     </div>

@@ -796,16 +796,63 @@ CREATE TABLE IF NOT EXISTS pi_analyzed (
 );
 """
 
+_PI_SESSIONS_DDL = """
+CREATE TABLE IF NOT EXISTS pi_sessions (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT UNIQUE NOT NULL,
+    technology TEXT DEFAULT '',
+    industry TEXT DEFAULT '',
+    pain_points_json TEXT DEFAULT '{}',
+    signal_plans_json TEXT DEFAULT '[]',
+    leads_count INTEGER DEFAULT 0,
+    analyzed_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+"""
+
 def _pi_init_tables():
     try:
         conn = db_manager.get_pg_conn()
         cur = conn.cursor()
         cur.execute(_PI_LEADS_DDL)
         cur.execute(_PI_ANALYZED_DDL)
+        cur.execute(_PI_SESSIONS_DDL)
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"[pi_tables] Init error: {e}")
+
+def _pi_save_session(session_id: str, technology: str = "", industry: str = "",
+                     pain_points=None, signal_plans=None,
+                     leads_count=None, analyzed_count=None):
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pi_sessions (session_id, technology, industry)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (session_id) DO UPDATE
+            SET technology = COALESCE(NULLIF(EXCLUDED.technology, ''), pi_sessions.technology),
+                industry = COALESCE(NULLIF(EXCLUDED.industry, ''), pi_sessions.industry),
+                updated_at = NOW()
+        """, (session_id, technology or '', industry or ''))
+        if pain_points is not None:
+            cur.execute("UPDATE pi_sessions SET pain_points_json=%s, updated_at=NOW() WHERE session_id=%s",
+                        (_json.dumps(pain_points), session_id))
+        if signal_plans is not None:
+            cur.execute("UPDATE pi_sessions SET signal_plans_json=%s, updated_at=NOW() WHERE session_id=%s",
+                        (_json.dumps(signal_plans), session_id))
+        if leads_count is not None:
+            cur.execute("UPDATE pi_sessions SET leads_count=%s, updated_at=NOW() WHERE session_id=%s",
+                        (leads_count, session_id))
+        if analyzed_count is not None:
+            cur.execute("UPDATE pi_sessions SET analyzed_count=%s, updated_at=NOW() WHERE session_id=%s",
+                        (analyzed_count, session_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_save_session] {e}")
 
 _pi_init_tables()
 
@@ -1254,7 +1301,7 @@ Rules: frequency = very common | common | occasional. Revenue impact must includ
             {"pain_points": pain_points, "session_id": session_id,
              "technology": request.technology, "industry": request.industry}
         )
-        return {
+        result_data = {
             "session_id": session_id,
             "technology": request.technology,
             "industry": request.industry,
@@ -1263,6 +1310,9 @@ Rules: frequency = very common | common | occasional. Revenue impact must includ
             "reddit_posts_found": reddit_context.count("[r/"),
             "indeed_jobs_found": indeed_context.count("[Indeed]"),
         }
+        _pi_save_session(session_id, request.technology, request.industry or "",
+                         pain_points=result_data)
+        return result_data
     except json.JSONDecodeError as e:
         raise HTTPException(500, f"LLM returned invalid JSON: {str(e)[:200]}")
     except Exception as e:
@@ -1342,6 +1392,9 @@ Generate 4-6 checks per pain point. At least 2 must be auto_checkable: true."""
             f"pi_signals_v2:{industry.lower()}:{session_id}",
             {"signal_plans": signal_plans, "session_id": session_id, "industry": industry}
         )
+        if session_id:
+            _pi_save_session(session_id, request.technology, request.industry or "",
+                             signal_plans=signal_plans)
         return {"session_id": session_id, "signal_plans": signal_plans}
     except json.JSONDecodeError as e:
         raise HTTPException(500, f"Failed to parse signal plans: {str(e)[:200]}")
@@ -1480,6 +1533,7 @@ async def _pi_extract_leads_task(request: PIV2ExtractLeadsRequest, session_id: s
     except Exception as e:
         print(f"[pi_leads_save] {e}")
 
+    _pi_save_session(session_id, leads_count=len(all_leads))
     _pi_v2_extract_status[session_id] = {
         "done": True, "progress": f"Done — {len(all_leads)} leads collected",
         "error": None, "leads": all_leads, "source_results": source_results,
@@ -1658,6 +1712,7 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
 
     _pi_v2_analyze_status[session_id]["done"] = True
     _pi_v2_analyze_status[session_id]["progress"] = f"Complete — {len(analyzed)} leads analyzed"
+    _pi_save_session(session_id, analyzed_count=len(analyzed))
 
 @app.get("/prospect-intel/v2/analyze/status/{session_id}")
 async def pi_v2_analyze_status_check(session_id: str):
@@ -1691,6 +1746,54 @@ async def pi_v2_get_analyzed(session_id: str):
         return {"session_id": session_id, "results": results}
     except Exception as e:
         raise HTTPException(500, f"Error fetching analyzed results: {str(e)}")
+
+@app.get("/prospect-intel/v2/history")
+async def pi_v2_history():
+    """List all PI sessions ordered by most recent, up to 50."""
+    try:
+        import psycopg2.extras
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT session_id, technology, industry, leads_count, analyzed_count,
+                   created_at, updated_at
+            FROM pi_sessions ORDER BY updated_at DESC LIMIT 50
+        """)
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        for r in rows:
+            r["created_at"] = str(r["created_at"])
+            r["updated_at"] = str(r["updated_at"])
+        return rows
+    except Exception as e:
+        print(f"[pi_history] {e}")
+        return []
+
+@app.get("/prospect-intel/v2/session/{session_id}")
+async def pi_v2_load_session(session_id: str):
+    """Load a full PI session — pain data, signal plans, plus lead/analyzed counts."""
+    try:
+        import psycopg2.extras
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM pi_sessions WHERE session_id = %s", (session_id,))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {
+            "session_id": row["session_id"],
+            "technology": row["technology"],
+            "industry": row["industry"],
+            "pain_data": _json.loads(row["pain_points_json"] or '{}'),
+            "signal_plans": _json.loads(row["signal_plans_json"] or '[]'),
+            "leads_count": row["leads_count"],
+            "analyzed_count": row["analyzed_count"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
