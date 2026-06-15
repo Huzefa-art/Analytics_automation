@@ -255,25 +255,48 @@ function PainPointsTab({ onDone, existingData }) {
   const [industry, setIndustry] = useState(existingData?.industry || '');
   const [depts, setDepts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(existingData || null);
+  const pollRef = useRef(null);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
 
   const generate = async () => {
     if (!tech.trim()) return;
     setLoading(true);
     setError('');
+    setProgress('Starting...');
     try {
       const res = await axios.post(`${API}/prospect-intel/v2/pain-points`, {
         technology: tech.trim(),
         industry: industry.trim(),
         departments: depts,
       });
-      setResult(res.data);
-      onDone(res.data);
+      const sid = res.data.session_id;
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await axios.get(`${API}/prospect-intel/v2/pain-points/status/${sid}`);
+          if (st.data.progress) setProgress(st.data.progress);
+          if (st.data.done) {
+            clearInterval(pollRef.current);
+            setLoading(false);
+            if (st.data.error) {
+              setError(st.data.error);
+            } else {
+              setResult(st.data.result);
+              onDone(st.data.result);
+            }
+          }
+        } catch {
+          clearInterval(pollRef.current);
+          setLoading(false);
+          setError('Lost connection while polling.');
+        }
+      }, 3000);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || 'Generation failed');
-    } finally {
       setLoading(false);
+      setError(e?.response?.data?.detail || e?.message || 'Generation failed');
     }
   };
 
@@ -339,7 +362,7 @@ function PainPointsTab({ onDone, existingData }) {
       {loading && (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
           <Loader size={28} className="animate-spin" style={{ color: 'var(--gold-primary)' }} />
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Searching Reddit, Indeed, and synthesising with AI...</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{progress || 'Searching Reddit, Indeed, and synthesising with AI...'}</span>
         </div>
       )}
 

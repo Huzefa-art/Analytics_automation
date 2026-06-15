@@ -1361,18 +1361,36 @@ class PIV2SignalFirstRequest(BaseModel):
 
 # ── Sub-tab 1: Pain Points ───────────────────────────────────────────────────
 
+_pi_v2_pain_status: dict = {}  # session_id -> {done, progress, error, result}
+
 @app.post("/prospect-intel/v2/pain-points")
-async def pi_v2_pain_points(request: PIV2PainPointsRequest):
-    """Generate 5-8 pain points using LLM + live web research (Reddit, Indeed)."""
-    from market_research import nvidia_chat
+async def pi_v2_pain_points(request: PIV2PainPointsRequest, background_tasks: BackgroundTasks):
+    """Start pain points generation in background. Poll /prospect-intel/v2/pain-points/status/{session_id}."""
     if not request.technology.strip():
         raise HTTPException(400, "Technology keyword is required")
-
     session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_pain_status[session_id] = {"done": False, "progress": "Starting research...", "error": None, "result": None}
+    background_tasks.add_task(_pi_pain_points_task, request, session_id)
+    return {"session_id": session_id, "message": "Pain points generation started"}
+
+@app.get("/prospect-intel/v2/pain-points/status/{session_id}")
+async def pi_v2_pain_points_status(session_id: str):
+    st = _pi_v2_pain_status.get(session_id)
+    if not st:
+        raise HTTPException(404, "Session not found")
+    return st
+
+async def _pi_pain_points_task(request: PIV2PainPointsRequest, session_id: str):
+    from market_research import nvidia_chat
+
+    def log(msg):
+        if session_id in _pi_v2_pain_status:
+            _pi_v2_pain_status[session_id]["progress"] = msg
+
     reddit_context = ""
     indeed_context = ""
 
-    # 1. Reddit research via Arctic Shift (no auth needed)
+    log("Searching Reddit for real pain evidence...")
     try:
         ind_lower = (request.industry or "").lower()
         subs = _PI_REDDIT_SUBS.get(ind_lower, ["entrepreneur", "smallbusiness", "business"])
@@ -1392,7 +1410,7 @@ async def pi_v2_pain_points(request: PIV2PainPointsRequest):
     except Exception:
         pass
 
-    # 2. Indeed job postings (RSS, no auth)
+    log("Checking Indeed job postings for hiring signals...")
     try:
         import feedparser
         q_enc = urllib.parse.quote_plus(f"{request.technology} {request.industry}")
@@ -1432,6 +1450,7 @@ Return ONLY a valid JSON array (no markdown fences):
 ]
 Rules: frequency = very common | common | occasional. Revenue impact must include dollar amounts AND calculation logic. Job titles must actually exist in {request.industry} industry."""
 
+    log("Generating pain points with AI...")
     try:
         raw = nvidia_chat(prompt, max_tokens=3000)
         clean = raw.strip()
@@ -1461,13 +1480,13 @@ Rules: frequency = very common | common | occasional. Revenue impact must includ
             "reddit_posts_found": reddit_context.count("[r/"),
             "indeed_jobs_found": indeed_context.count("[Indeed]"),
         }
-        _pi_save_session(session_id, request.technology, request.industry or "",
-                         pain_points=result_data)
-        return result_data
-    except json.JSONDecodeError as e:
-        raise HTTPException(500, f"LLM returned invalid JSON: {str(e)[:200]}")
+        _pi_save_session(session_id, request.technology, request.industry or "", pain_points=result_data)
+        _pi_v2_pain_status[session_id]["done"] = True
+        _pi_v2_pain_status[session_id]["result"] = result_data
+        _pi_v2_pain_status[session_id]["progress"] = f"Done — {len(pain_points)} pain points generated"
     except Exception as e:
-        raise HTTPException(500, f"Pain points generation failed: {str(e)}")
+        _pi_v2_pain_status[session_id]["done"] = True
+        _pi_v2_pain_status[session_id]["error"] = str(e)
 
 # ── Sub-tab 2: Signal Plans ──────────────────────────────────────────────────
 
