@@ -273,6 +273,13 @@ function PainPointsTab({ onDone, existingData }) {
         industry: industry.trim(),
         departments: depts,
       });
+      // If server already returned full result (old sync format), use it directly
+      if (res.data.pain_points?.length) {
+        setResult(res.data);
+        onDone(res.data);
+        setLoading(false);
+        return;
+      }
       const sid = res.data.session_id;
       pollRef.current = setInterval(async () => {
         try {
@@ -440,6 +447,13 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
         technology: painData.technology || '',
         session_id: painData.session_id || '',
       });
+      // If server already returned full result (old sync format), use it directly
+      if (res.data.signal_plans?.length) {
+        setPlans(res.data.signal_plans);
+        onDone(res.data.signal_plans);
+        setLoading(false);
+        return;
+      }
       const sid = res.data.session_id;
       // Poll for completion
       pollRef.current = setInterval(async () => {
