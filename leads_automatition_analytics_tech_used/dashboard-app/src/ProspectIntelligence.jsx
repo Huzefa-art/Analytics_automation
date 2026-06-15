@@ -398,15 +398,18 @@ function PainPointsTab({ onDone, existingData }) {
 // ── Sub-tab 2: Signal Plans ───────────────────────────────────────────────────
 function SignalPlansTab({ painData, onDone, existingPlans }) {
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [plans, setPlans] = useState(existingPlans || []);
   const [expanded, setExpanded] = useState({});
   const autoGenRef = useRef(false);
+  const pollRef = useRef(null);
 
   const generate = useCallback(async () => {
     if (!painData?.pain_points?.length) return;
     setLoading(true);
     setError('');
+    setProgress('Starting...');
     try {
       const res = await axios.post(`${API}/prospect-intel/v2/signal-plans`, {
         pain_points: painData.pain_points,
@@ -414,14 +417,35 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
         technology: painData.technology || '',
         session_id: painData.session_id || '',
       });
-      setPlans(res.data.signal_plans || []);
-      onDone(res.data.signal_plans || []);
+      const sid = res.data.session_id;
+      // Poll for completion
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await axios.get(`${API}/prospect-intel/v2/signal-plans/status/${sid}`);
+          if (st.data.progress) setProgress(st.data.progress);
+          if (st.data.done) {
+            clearInterval(pollRef.current);
+            setLoading(false);
+            if (st.data.error) {
+              setError(st.data.error);
+            } else {
+              setPlans(st.data.signal_plans || []);
+              onDone(st.data.signal_plans || []);
+            }
+          }
+        } catch {
+          clearInterval(pollRef.current);
+          setLoading(false);
+          setError('Lost connection while polling signal plans.');
+        }
+      }, 3000);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || 'Failed to generate signal plans');
-    } finally {
       setLoading(false);
+      setError(e?.response?.data?.detail || e?.message || 'Failed to generate signal plans');
     }
   }, [painData, onDone]);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
 
   useEffect(() => {
     if (painData?.pain_points?.length && !existingPlans?.length && !autoGenRef.current) {
@@ -465,7 +489,7 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
       {loading && (
         <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem', gap: '0.75rem' }}>
           <Loader size={28} className="animate-spin" style={{ color: '#a78bfa' }} />
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Generating signal detection plans with industry-specific sources...</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{progress || 'Generating signal detection plans...'}</span>
         </div>
       )}
 

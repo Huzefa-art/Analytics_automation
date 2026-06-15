@@ -2079,14 +2079,31 @@ Rules: frequency = very common | common | occasional. Revenue impact must includ
 
 # ── Sub-tab 2: Signal Plans ──────────────────────────────────────────────────
 
+_pi_v2_signal_status: dict = {}  # session_id -> {done, progress, error, signal_plans}
+
 @app.post("/prospect-intel/v2/signal-plans")
-async def pi_v2_signal_plans(request: PIV2SignalPlansRequest):
-    """Generate per-pain-point signal detection plans with industry-appropriate sources."""
-    from market_research import nvidia_chat
+async def pi_v2_signal_plans(request: PIV2SignalPlansRequest, background_tasks: BackgroundTasks):
     if not request.pain_points:
         raise HTTPException(400, "Pain points list is required")
-
     session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_signal_status[session_id] = {"done": False, "progress": "Starting...", "error": None, "signal_plans": []}
+    background_tasks.add_task(_pi_signal_plans_task, request, session_id)
+    return {"session_id": session_id, "message": "Signal plan generation started"}
+
+@app.get("/prospect-intel/v2/signal-plans/status/{session_id}")
+async def pi_v2_signal_plans_status(session_id: str):
+    st = _pi_v2_signal_status.get(session_id)
+    if not st:
+        raise HTTPException(404, "Session not found")
+    return st
+
+async def _pi_signal_plans_task(request: PIV2SignalPlansRequest, session_id: str):
+    from market_research import nvidia_chat
+
+    def log(msg):
+        if session_id in _pi_v2_signal_status:
+            _pi_v2_signal_status[session_id]["progress"] = msg
+
     industry = request.industry or "general"
     b2b_kws = ["saas", "software", "logistics", "manufacturing", "construction", "legal", "accounting", "finance", "b2b", "recruitment"]
     is_b2b = any(k in industry.lower() for k in b2b_kws)
@@ -2249,25 +2266,27 @@ IMPORTANT: The example above shows the correct format. Now generate plans for th
         batch_size = 2
         for i in range(0, len(pain_points), batch_size):
             batch = pain_points[i:i + batch_size]
+            log(f"Generating plans {i+1}–{min(i+batch_size, len(pain_points))} of {len(pain_points)}...")
             plans = _call_llm_for_plans(batch)
             all_plans.extend(plans)
 
         if not all_plans:
-            raise HTTPException(500, "LLM returned no signal plans. The model may be overloaded — please retry.")
+            _pi_v2_signal_status[session_id]["done"] = True
+            _pi_v2_signal_status[session_id]["error"] = "LLM returned no valid plans after retries — please retry."
+            return
 
         db_manager.save_market_result(
             "pi_signals_v2", industry,
             f"pi_signals_v2:{industry.lower()}:{session_id}",
             {"signal_plans": all_plans, "session_id": session_id, "industry": industry}
         )
-        if session_id:
-            _pi_save_session(session_id, request.technology, request.industry or "",
-                             signal_plans=all_plans)
-        return {"session_id": session_id, "signal_plans": all_plans}
-    except HTTPException:
-        raise
+        _pi_save_session(session_id, request.technology, request.industry or "", signal_plans=all_plans)
+        _pi_v2_signal_status[session_id]["done"] = True
+        _pi_v2_signal_status[session_id]["signal_plans"] = all_plans
+        _pi_v2_signal_status[session_id]["progress"] = f"Done — {len(all_plans)} signal plans generated"
     except Exception as e:
-        raise HTTPException(500, f"Signal plan generation failed: {str(e)}")
+        _pi_v2_signal_status[session_id]["done"] = True
+        _pi_v2_signal_status[session_id]["error"] = str(e)
 
 # ── Sub-tab 3: Lead Extraction ───────────────────────────────────────────────
 
