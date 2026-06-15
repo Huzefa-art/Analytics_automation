@@ -844,6 +844,20 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId, signalPlans
         </div>
       )}
 
+      {leads.length === 0 && !loading && Object.keys(sourceResults).length > 0 && (
+        <div style={{ background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.3)', borderRadius: '10px', padding: '1rem 1.25rem', marginBottom: '1rem' }}>
+          <div style={{ fontWeight: 700, color: '#ff6b6b', marginBottom: '6px', fontSize: '0.9rem' }}>⚠ 0 leads collected</div>
+          {Object.entries(sourceResults).some(([, r]) => r.status && r.status.includes('Playwright')) && (
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              <b style={{ color: '#ffdf00' }}>Google Maps</b> requires browser automation (Playwright) which is unavailable on this cloud deployment.
+            </div>
+          )}
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+            Switch to <b style={{ color: '#a78bfa' }}>Signal First mode</b> (uses Indeed/Reddit/News — no browser needed) or select <b style={{ color: '#39ff14' }}>Yellow Pages</b> as the source instead.
+          </div>
+        </div>
+      )}
+
       {leads.length > 0 && !loading && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
