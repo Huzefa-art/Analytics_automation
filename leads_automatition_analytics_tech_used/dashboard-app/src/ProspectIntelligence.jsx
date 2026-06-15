@@ -10,6 +10,23 @@ import {
 
 const API = '/api';
 
+// Retry POST up to 3 times on 502 (Render cold-start takes ~30s to wake)
+async function postWithRetry(url, data, { onWaking } = {}) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await axios.post(url, data);
+    } catch (e) {
+      const status = e?.response?.status;
+      if ((status === 502 || status === 503) && attempt < 2) {
+        if (onWaking) onWaking(attempt + 1);
+        await new Promise(r => setTimeout(r, (attempt + 1) * 8000));
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
 // ── Score colours ─────────────────────────────────────────────────────────────
 function scoreColor(n) {
   if (n >= 70) return { text: '#ff5020', bg: 'rgba(255,80,32,0.12)', border: 'rgba(255,80,32,0.35)', label: 'HOT' };
@@ -268,11 +285,11 @@ function PainPointsTab({ onDone, existingData }) {
     setError('');
     setProgress('Starting...');
     try {
-      const res = await axios.post(`${API}/prospect-intel/v2/pain-points`, {
+      const res = await postWithRetry(`${API}/prospect-intel/v2/pain-points`, {
         technology: tech.trim(),
         industry: industry.trim(),
         departments: depts,
-      });
+      }, { onWaking: (n) => setProgress(`Server waking up… retry ${n}/2 (Render cold start)`) });
       // If server already returned full result (old sync format), use it directly
       if (res.data.pain_points?.length) {
         setResult(res.data);
@@ -441,12 +458,12 @@ function SignalPlansTab({ painData, onDone, existingPlans }) {
     setError('');
     setProgress('Starting...');
     try {
-      const res = await axios.post(`${API}/prospect-intel/v2/signal-plans`, {
+      const res = await postWithRetry(`${API}/prospect-intel/v2/signal-plans`, {
         pain_points: painData.pain_points,
         industry: painData.industry || '',
         technology: painData.technology || '',
         session_id: painData.session_id || '',
-      });
+      }, { onWaking: (n) => setProgress(`Server waking up… retry ${n}/2 (Render cold start)`) });
       // If server already returned full result (old sync format), use it directly
       if (res.data.signal_plans?.length) {
         setPlans(res.data.signal_plans);
@@ -649,13 +666,13 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId, signalPlans
 
     if (extractionMode === 'leads_first') {
       try {
-        const res = await axios.post(`${API}/prospect-intel/v2/extract-leads`, {
+        const res = await postWithRetry(`${API}/prospect-intel/v2/extract-leads`, {
           industry: industry.trim(),
           location: location.trim(),
           num_leads: numLeads,
           sources,
           session_id: masterSessionId || '',
-        });
+        }, { onWaking: (n) => setError(`Server waking up… retry ${n}/2`) });
         setSessionId(res.data.session_id);
         poll(res.data.session_id);
       } catch (e) {
@@ -664,13 +681,13 @@ function LeadExtractionTab({ onDone, existingLeads, masterSessionId, signalPlans
       }
     } else {
       try {
-        const res = await axios.post(`${API}/prospect-intel/v2/extract-leads-signal-first`, {
+        const res = await postWithRetry(`${API}/prospect-intel/v2/extract-leads-signal-first`, {
           industry: industry.trim(),
           location: location.trim(),
           num_leads: numLeads,
           signal_plans: signalPlans,
           session_id: masterSessionId || '',
-        });
+        }, { onWaking: (n) => setError(`Server waking up… retry ${n}/2`) });
         setSessionId(res.data.session_id);
         poll(res.data.session_id);
       } catch (e) {
@@ -981,13 +998,13 @@ function SignalAnalyzerTab({ leads, signalPlans, technology, industry, onDone, m
     setAnalyzed([]);
     setProgress({ current: 0, total: leads.length, msg: 'Starting...' });
     try {
-      const res = await axios.post(`${API}/prospect-intel/v2/analyze`, {
+      const res = await postWithRetry(`${API}/prospect-intel/v2/analyze`, {
         leads,
         signal_plans: signalPlans,
         technology: technology || '',
         industry: industry || '',
         session_id: masterSessionId || '',
-      });
+      }, { onWaking: (n) => setProgress({ current: 0, total: leads.length, msg: `Server waking up… retry ${n}/2` }) });
       const sid = res.data.session_id;
       setSessionId(sid);
       pollRef.current = setInterval(async () => {
