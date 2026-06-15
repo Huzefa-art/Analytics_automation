@@ -109,16 +109,19 @@ function HistoryPanel({ onLoad }) {
       const res = await axios.get(`${API}/prospect-intel/v2/history`);
       setSessions(res.data || []);
     } catch (e) {
-      setError('Could not load history');
+      setError(e?.response?.data?.detail || 'Could not load history — check DB connection');
     } finally {
       setFetching(false);
     }
   };
 
+  // Auto-fetch on mount so history is ready immediately
+  useEffect(() => { fetchHistory(); }, []);
+
   const toggle = () => {
     const next = !open;
     setOpen(next);
-    if (next && sessions.length === 0) fetchHistory();
+    if (next) fetchHistory();
   };
 
   const loadSession = async (sid) => {

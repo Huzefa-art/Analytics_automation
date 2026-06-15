@@ -1456,16 +1456,20 @@ CREATE TABLE IF NOT EXISTS pi_sessions (
 """
 
 def _pi_init_tables():
-    try:
-        conn = db_manager.get_pg_conn()
-        cur = conn.cursor()
-        cur.execute(_PI_LEADS_DDL)
-        cur.execute(_PI_ANALYZED_DDL)
-        cur.execute(_PI_SESSIONS_DDL)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[pi_tables] Init error: {e}")
+    for attempt in range(3):
+        try:
+            conn = db_manager.get_pg_conn()
+            cur = conn.cursor()
+            cur.execute(_PI_LEADS_DDL)
+            cur.execute(_PI_ANALYZED_DDL)
+            cur.execute(_PI_SESSIONS_DDL)
+            conn.commit()
+            conn.close()
+            print("[pi_tables] Tables initialized OK")
+            return
+        except Exception as e:
+            print(f"[pi_tables] Init error (attempt {attempt+1}): {e}")
+            import time as _t; _t.sleep(2)
 
 def _pi_save_session(session_id: str, technology: str = "", industry: str = "",
                      pain_points=None, signal_plans=None,
@@ -2775,6 +2779,9 @@ async def pi_v2_history():
         import psycopg2.extras
         conn = db_manager.get_pg_conn()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Ensure table exists before querying
+        cur.execute(_PI_SESSIONS_DDL)
+        conn.commit()
         cur.execute("""
             SELECT session_id, technology, industry, leads_count, analyzed_count,
                    created_at, updated_at
@@ -2788,7 +2795,7 @@ async def pi_v2_history():
         return rows
     except Exception as e:
         print(f"[pi_history] {e}")
-        return []
+        raise HTTPException(500, f"History load failed: {str(e)}")
 
 @app.get("/prospect-intel/v2/session/{session_id}")
 async def pi_v2_load_session(session_id: str):
