@@ -2098,42 +2098,109 @@ async def pi_v2_signal_plans(request: PIV2SignalPlansRequest):
         pain_block = "\n".join([f"{i+1}. {pp.get('title','')}: {pp.get('description','')[:150]}"
                                  for i, pp in enumerate(pain_subset)])
         return f"""You are a B2B signal intelligence analyst for the {industry} industry.
-Technology: {request.technology or "the product"}
+Technology being sold: {request.technology or "AI automation"}
 
-PAIN POINTS:
+PAIN POINTS TO ANALYZE:
 {pain_block}
 
-For EACH pain point above, create ONE signal detection plan.
+For EACH pain point, create EXACTLY 5 checks in this order:
+1. AUTO — Solution gap check A: Is the technology solution MISSING from the company website?
+2. AUTO — Solution gap check B: Is a related tech also missing (e.g. no CRM, no booking widget)?
+3. AUTO — Problem evidence check A: Is the PAIN actively visible? (e.g. contact form only, no live chat)
+4. AUTO — Problem evidence check B: Is there a second indicator of the pain? (e.g. reviews mentioning slow response, no pixels)
+5. MANUAL — Deep check: Human verification from LinkedIn/Indeed/reviews/news
+
+RULES — VIOLATING THESE WILL BREAK THE SYSTEM:
+- confirmed_if MUST be a specific boolean test. NEVER write "true", "false", or "N/A".
+  Good: "No live chat widget found in page HTML and BuiltWith shows no chat technology"
+  Good: "Contact form is the only intake method — no phone widget, booking button, or chatbot detected"
+  Bad: "true", "confirmed if present", "N/A"
+- where_to_look MUST be an actual URL pattern or tool name.
+  Good: "https://{{company_website}}/contact", "BuiltWith.com tech lookup", "Google Maps listing"
+  Bad: "logisticscompany.com", "example.com", "their website"
+- Use {{company_website}} as the placeholder for the actual domain — NEVER hardcode any example domain.
+- auto_checkable is true ONLY for: live_chat, booking, contact_form, meta_pixel, google_analytics, cms
+- importance_level: "critical" = directly proves pain, "important" = strong evidence, "supporting" = context
+
 ALLOWED SOURCES: {allowed}
 FORBIDDEN SOURCES: {forbidden}
 
-Return ONLY a valid JSON array (no markdown, no explanation):
+Return ONLY a valid JSON array (no markdown, no explanation, no trailing text):
 [
   {{
     "pain_point_title": "exact title from list above",
-    "decision_maker": {{"job_title": "Specific contact role", "why": "Why they own this"}},
+    "decision_maker": {{"job_title": "Specific job title who owns this problem", "why": "Exactly why this role owns this pain"}},
     "checks": [
       {{
-        "check_name": "What you check",
-        "where_to_look": "Exact URL or tool",
-        "what_to_search": "Exact search term",
-        "what_to_check": "Specific element or field",
-        "confirmed_if": "Boolean condition",
+        "check_name": "No live chat widget on website",
+        "where_to_look": "https://{{company_website}} — inspect page source",
+        "what_to_search": "Intercom, Drift, Tidio, LiveChat, Zendesk Chat script tags",
+        "what_to_check": "Presence of chat widget JavaScript in page HTML",
+        "confirmed_if": "No live chat widget JavaScript found in page source AND BuiltWith shows no chat technology installed",
         "difficulty": "easy",
         "signal_type": "live_chat",
-        "auto_checkable": true
+        "auto_checkable": true,
+        "importance_level": "critical",
+        "outreach_angle": "Your site has no live chat — prospects who visit at night get zero response until next morning."
+      }},
+      {{
+        "check_name": "No online booking or scheduling system",
+        "where_to_look": "https://{{company_website}} — scan for booking buttons",
+        "what_to_search": "Calendly, Acuity, BookingKit, Booksy, OpenTable embed",
+        "what_to_check": "Any booking widget or scheduling link on website",
+        "confirmed_if": "No booking or scheduling system embedded on any page of the site",
+        "difficulty": "easy",
+        "signal_type": "booking",
+        "auto_checkable": true,
+        "importance_level": "critical",
+        "outreach_angle": "Without online booking, every appointment requires manual phone coordination — a direct cost."
+      }},
+      {{
+        "check_name": "Contact form is only intake method",
+        "where_to_look": "https://{{company_website}}/contact",
+        "what_to_search": "HTML form elements, phone click-to-call, chat widget",
+        "what_to_check": "Whether contact form is the sole lead capture mechanism",
+        "confirmed_if": "Only a static contact form found — no phone widget, no live chat, no booking link",
+        "difficulty": "easy",
+        "signal_type": "contact_form",
+        "auto_checkable": true,
+        "importance_level": "important",
+        "outreach_angle": "A contact form with 24-48hr response time loses customers to competitors who answer instantly."
+      }},
+      {{
+        "check_name": "No tracking pixels installed",
+        "where_to_look": "https://{{company_website}} — check page source for pixel scripts",
+        "what_to_search": "Facebook Pixel fbq(), Google Analytics gtag(), Meta pixel",
+        "what_to_check": "Presence of retargeting or analytics pixels",
+        "confirmed_if": "No Meta Pixel and no Google Analytics found in page source",
+        "difficulty": "easy",
+        "signal_type": "meta_pixel",
+        "auto_checkable": true,
+        "importance_level": "supporting",
+        "outreach_angle": "No retargeting means website visitors who don't convert are permanently lost."
+      }},
+      {{
+        "check_name": "Manual review of customer complaints and hiring signals",
+        "where_to_look": "Google Maps reviews for this business + Indeed job postings",
+        "what_to_search": "Reviews mentioning 'slow response', 'no answer', 'waited' + Indeed jobs for admin/receptionist roles",
+        "what_to_check": "Recent reviews citing communication delays or job posts seeking people to handle inquiries",
+        "confirmed_if": "2+ reviews in last 6 months mention response time issues OR active job post for customer-facing admin role",
+        "difficulty": "medium",
+        "signal_type": "manual_review_check",
+        "auto_checkable": false,
+        "importance_level": "important",
+        "outreach_angle": "Hiring staff to handle inquiries manually when a bot could do it 24/7 at a fraction of the cost."
       }}
     ]
   }}
 ]
-signal_type: live_chat|booking|contact_form|meta_pixel|google_analytics|cms|crm|manual_google_search|manual_linkedin|manual_review_check|manual_indeed
-auto_checkable: true ONLY for live_chat, booking, contact_form, meta_pixel, google_analytics, cms
-Generate 3-4 checks per pain point. At least 2 must be auto_checkable."""
+
+IMPORTANT: The example above shows the correct format. Now generate plans for the ACTUAL pain points listed. Use {{company_website}} as domain placeholder. Never write "true"/"false"/"N/A" for confirmed_if."""
 
     def _call_llm_for_plans(pain_subset):
         prompt = _build_signal_prompt(pain_subset)
         for attempt in range(2):
-            raw = nvidia_chat(prompt, max_tokens=2000)
+            raw = nvidia_chat(prompt, max_tokens=3500)
             clean = (raw or "").strip()
             if not clean or clean.startswith("NVIDIA API error"):
                 continue  # retry
