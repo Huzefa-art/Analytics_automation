@@ -791,16 +791,46 @@ CREATE TABLE IF NOT EXISTS pi_analyzed (
     website TEXT,
     phone TEXT,
     email TEXT,
+    location TEXT DEFAULT '',
     signal_score INTEGER DEFAULT 0,
     confidence_rate INTEGER DEFAULT 0,
-    signal_evidence JSONB DEFAULT '{}',
+    signal_evidence JSONB DEFAULT '[]',
     current_process TEXT DEFAULT '',
     after_chatbot TEXT DEFAULT '',
     decision_maker TEXT DEFAULT '',
     outreach_status TEXT DEFAULT 'not_contacted',
+    extraction_mode TEXT DEFAULT 'leads_first',
+    signal_trigger TEXT DEFAULT '',
+    signal_source_url TEXT DEFAULT '',
+    signal_confirmed BOOLEAN DEFAULT FALSE,
+    score_reason TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
 );
 """
+
+_PI_ANALYZED_MIGRATIONS = [
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS location TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS extraction_mode TEXT DEFAULT 'leads_first'",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_trigger TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_source_url TEXT DEFAULT ''",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS signal_confirmed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE pi_analyzed ADD COLUMN IF NOT EXISTS score_reason TEXT DEFAULT ''",
+]
+
+def _pi_migrate_analyzed():
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        for stmt in _PI_ANALYZED_MIGRATIONS:
+            try:
+                cur.execute(stmt)
+            except Exception:
+                conn.rollback()
+                continue
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_migrate_analyzed] {e}")
 
 _PI_SESSIONS_DDL = """
 CREATE TABLE IF NOT EXISTS pi_sessions (
@@ -818,16 +848,20 @@ CREATE TABLE IF NOT EXISTS pi_sessions (
 """
 
 def _pi_init_tables():
-    try:
-        conn = db_manager.get_pg_conn()
-        cur = conn.cursor()
-        cur.execute(_PI_LEADS_DDL)
-        cur.execute(_PI_ANALYZED_DDL)
-        cur.execute(_PI_SESSIONS_DDL)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[pi_tables] Init error: {e}")
+    for attempt in range(3):
+        try:
+            conn = db_manager.get_pg_conn()
+            cur = conn.cursor()
+            cur.execute(_PI_LEADS_DDL)
+            cur.execute(_PI_ANALYZED_DDL)
+            cur.execute(_PI_SESSIONS_DDL)
+            conn.commit()
+            conn.close()
+            print("[pi_tables] Tables initialized OK")
+            return
+        except Exception as e:
+            print(f"[pi_tables] Init error (attempt {attempt+1}): {e}")
+            import time as _t; _t.sleep(2)
 
 def _pi_save_session(session_id: str, technology: str = "", industry: str = "",
                      pain_points=None, signal_plans=None,
@@ -1186,6 +1220,110 @@ def _pi_companies_house_sync(industry: str, location: str, max_results: int = 10
         print(f"[companies_house] {e}")
     return leads
 
+# ── Signal First helper functions ─────────────────────────────────────────────
+
+def _si_search_indeed(pain_keyword: str, industry: str, location: str, max_results: int = 8) -> list:
+    found = []
+    try:
+        import feedparser
+        q = urllib.parse.quote_plus(f"{pain_keyword} {industry}")
+        l_enc = urllib.parse.quote_plus(location)
+        url = f"https://www.indeed.com/rss?q={q}&l={l_enc}&limit={max_results}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=8)
+        if r.status_code != 200:
+            return found
+        feed = feedparser.parse(r.content)
+        for entry in feed.entries:
+            title = entry.get('title', '')
+            company = ''
+            if ' at ' in title:
+                company = title.split(' at ')[-1].strip()
+            elif ' - ' in title:
+                parts = title.split(' - ')
+                if len(parts) >= 2:
+                    company = parts[1].strip()
+            if company and len(company) > 2:
+                found.append({
+                    'company_name': company,
+                    'evidence_text': f"Indeed job posting: \"{title}\" — {entry.get('summary', '')[:200]}",
+                    'source_url': entry.get('link', ''),
+                    'source': 'Indeed Jobs',
+                })
+    except Exception as e:
+        print(f"[si_indeed] {e}")
+    return found
+
+
+def _si_search_reddit(pain_keyword: str, industry: str, max_results: int = 5) -> list:
+    found = []
+    try:
+        ind_lower = industry.lower()
+        subs = _PI_REDDIT_SUBS.get(ind_lower, ["smallbusiness", "entrepreneur"])
+        query_enc = urllib.parse.quote(f"{pain_keyword} {industry}")
+        for sub in subs[:2]:
+            r = requests.get(
+                f"https://arctic-shift.photon-reddit.com/api/posts/search?q={query_enc}&subreddit={sub}&limit=5&sort=score",
+                timeout=8
+            )
+            if r.status_code == 200:
+                for post in r.json().get("data", [])[:3]:
+                    found.append({
+                        'company_name': None,
+                        'evidence_text': f"r/{sub}: {post.get('title', '')} — {post.get('selftext', '')[:200]}",
+                        'source_url': f"https://reddit.com{post.get('permalink', '')}",
+                        'source': f"Reddit r/{sub}",
+                    })
+    except Exception as e:
+        print(f"[si_reddit] {e}")
+    return found
+
+
+def _si_search_news(pain_keyword: str, industry: str, location: str, max_results: int = 5) -> list:
+    found = []
+    try:
+        q = urllib.parse.quote_plus(f"{industry} {pain_keyword} {location}")
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-GB&gl=GB&ceid=GB:en"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return found
+        soup_ns = _BS4(r.content, 'xml')
+        for item in soup_ns.find_all('item')[:max_results]:
+            title_el = item.find('title')
+            link_el = item.find('link')
+            desc_el = item.find('description')
+            title = title_el.get_text() if title_el else ''
+            link = link_el.get_text() if link_el else ''
+            desc = desc_el.get_text() if desc_el else ''
+            if title:
+                found.append({
+                    'company_name': None,
+                    'evidence_text': f"Google News: \"{title}\" — {desc[:150]}",
+                    'source_url': link,
+                    'source': 'Google News',
+                })
+    except Exception as e:
+        print(f"[si_news] {e}")
+    return found
+
+
+def _si_enrich_company(company_name: str, location: str) -> dict:
+    try:
+        url = f"https://www.yellowpages.com/search?search_terms={urllib.parse.quote_plus(company_name)}&geo_location_terms={urllib.parse.quote_plus(location)}"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        soup = _BS4(resp.text, "html.parser")
+        listing = soup.find("div", class_="srp-listing")
+        if listing:
+            phone_el = listing.find("div", class_="phones")
+            web_el = listing.find("a", class_="track-visit-website")
+            return {
+                "phone": phone_el.get_text(strip=True) if phone_el else "",
+                "website": web_el.get("href", "") if web_el else "",
+            }
+    except Exception:
+        pass
+    return {"phone": "", "website": ""}
+
+
 # ── PI V2 request models ──────────────────────────────────────────────────────
 
 class PIV2PainPointsRequest(BaseModel):
@@ -1212,6 +1350,13 @@ class PIV2AnalyzeRequest(BaseModel):
     signal_plans: list
     technology: str = ""
     industry: str = ""
+    session_id: str = ""
+
+class PIV2SignalFirstRequest(BaseModel):
+    industry: str
+    location: str
+    signal_plans: list
+    num_leads: int = 20
     session_id: str = ""
 
 # ── Sub-tab 1: Pain Points ───────────────────────────────────────────────────
@@ -1349,51 +1494,142 @@ async def pi_v2_signal_plans(request: PIV2SignalPlansRequest):
         pain_block = "\n".join([f"{i+1}. {pp.get('title','')}: {pp.get('description','')[:150]}"
                                  for i, pp in enumerate(pain_subset)])
         return f"""You are a B2B signal intelligence analyst for the {industry} industry.
-Technology: {request.technology or "the product"}
+Technology being sold: {request.technology or "AI automation"}
 
-PAIN POINTS:
+PAIN POINTS TO ANALYZE:
 {pain_block}
 
-For EACH pain point above, create ONE signal detection plan.
+For EACH pain point, create EXACTLY 5 checks in this order:
+1. AUTO — Solution gap check A: Is the technology solution MISSING from the company website?
+2. AUTO — Solution gap check B: Is a related tech also missing (e.g. no CRM, no booking widget)?
+3. AUTO — Problem evidence check A: Is the PAIN actively visible? (e.g. contact form only, no live chat)
+4. AUTO — Problem evidence check B: Is there a second indicator of the pain? (e.g. reviews mentioning slow response, no pixels)
+5. MANUAL — Deep check: Human verification from LinkedIn/Indeed/reviews/news
+
+RULES — VIOLATING THESE WILL BREAK THE SYSTEM:
+- confirmed_if MUST be a specific boolean test. NEVER write "true", "false", or "N/A".
+  Good: "No live chat widget found in page HTML and BuiltWith shows no chat technology"
+  Good: "Contact form is the only intake method — no phone widget, booking button, or chatbot detected"
+  Bad: "true", "confirmed if present", "N/A"
+- where_to_look MUST be an actual URL pattern or tool name.
+  Good: "https://{{company_website}}/contact", "BuiltWith.com tech lookup", "Google Maps listing"
+  Bad: "logisticscompany.com", "example.com", "their website"
+- Use {{company_website}} as the placeholder for the actual domain — NEVER hardcode any example domain.
+- auto_checkable is true ONLY for: live_chat, booking, contact_form, meta_pixel, google_analytics, cms
+- importance_level: "critical" = directly proves pain, "important" = strong evidence, "supporting" = context
+
 ALLOWED SOURCES: {allowed}
 FORBIDDEN SOURCES: {forbidden}
 
-Return ONLY a valid JSON array (no markdown, no explanation):
+Return ONLY a valid JSON array (no markdown, no explanation, no trailing text):
 [
   {{
     "pain_point_title": "exact title from list above",
-    "decision_maker": {{"job_title": "Specific contact role", "why": "Why they own this"}},
+    "decision_maker": {{"job_title": "Specific job title who owns this problem", "why": "Exactly why this role owns this pain"}},
     "checks": [
       {{
-        "check_name": "What you check",
-        "where_to_look": "Exact URL or tool",
-        "what_to_search": "Exact search term",
-        "what_to_check": "Specific element or field",
-        "confirmed_if": "Boolean condition",
+        "check_name": "No live chat widget on website",
+        "where_to_look": "https://{{company_website}} — inspect page source",
+        "what_to_search": "Intercom, Drift, Tidio, LiveChat, Zendesk Chat script tags",
+        "what_to_check": "Presence of chat widget JavaScript in page HTML",
+        "confirmed_if": "No live chat widget JavaScript found in page source AND BuiltWith shows no chat technology installed",
         "difficulty": "easy",
         "signal_type": "live_chat",
-        "auto_checkable": true
+        "auto_checkable": true,
+        "importance_level": "critical",
+        "outreach_angle": "Your site has no live chat — prospects who visit at night get zero response until next morning."
+      }},
+      {{
+        "check_name": "No online booking or scheduling system",
+        "where_to_look": "https://{{company_website}} — scan for booking buttons",
+        "what_to_search": "Calendly, Acuity, BookingKit, Booksy, OpenTable embed",
+        "what_to_check": "Any booking widget or scheduling link on website",
+        "confirmed_if": "No booking or scheduling system embedded on any page of the site",
+        "difficulty": "easy",
+        "signal_type": "booking",
+        "auto_checkable": true,
+        "importance_level": "critical",
+        "outreach_angle": "Without online booking, every appointment requires manual phone coordination — a direct cost."
+      }},
+      {{
+        "check_name": "Contact form is only intake method",
+        "where_to_look": "https://{{company_website}}/contact",
+        "what_to_search": "HTML form elements, phone click-to-call, chat widget",
+        "what_to_check": "Whether contact form is the sole lead capture mechanism",
+        "confirmed_if": "Only a static contact form found — no phone widget, no live chat, no booking link",
+        "difficulty": "easy",
+        "signal_type": "contact_form",
+        "auto_checkable": true,
+        "importance_level": "important",
+        "outreach_angle": "A contact form with 24-48hr response time loses customers to competitors who answer instantly."
+      }},
+      {{
+        "check_name": "No tracking pixels installed",
+        "where_to_look": "https://{{company_website}} — check page source for pixel scripts",
+        "what_to_search": "Facebook Pixel fbq(), Google Analytics gtag(), Meta pixel",
+        "what_to_check": "Presence of retargeting or analytics pixels",
+        "confirmed_if": "No Meta Pixel and no Google Analytics found in page source",
+        "difficulty": "easy",
+        "signal_type": "meta_pixel",
+        "auto_checkable": true,
+        "importance_level": "supporting",
+        "outreach_angle": "No retargeting means website visitors who don't convert are permanently lost."
+      }},
+      {{
+        "check_name": "Manual review of customer complaints and hiring signals",
+        "where_to_look": "Google Maps reviews for this business + Indeed job postings",
+        "what_to_search": "Reviews mentioning 'slow response', 'no answer', 'waited' + Indeed jobs for admin/receptionist roles",
+        "what_to_check": "Recent reviews citing communication delays or job posts seeking people to handle inquiries",
+        "confirmed_if": "2+ reviews in last 6 months mention response time issues OR active job post for customer-facing admin role",
+        "difficulty": "medium",
+        "signal_type": "manual_review_check",
+        "auto_checkable": false,
+        "importance_level": "important",
+        "outreach_angle": "Hiring staff to handle inquiries manually when a bot could do it 24/7 at a fraction of the cost."
       }}
     ]
   }}
 ]
-signal_type: live_chat|booking|contact_form|meta_pixel|google_analytics|cms|crm|manual_google_search|manual_linkedin|manual_review_check|manual_indeed
-auto_checkable: true ONLY for live_chat, booking, contact_form, meta_pixel, google_analytics, cms
-Generate 3-4 checks per pain point. At least 2 must be auto_checkable."""
+
+IMPORTANT: The example above shows the correct format. Now generate plans for the ACTUAL pain points listed. Use {{company_website}} as domain placeholder. Never write "true"/"false"/"N/A" for confirmed_if."""
+
+    # Hard-coded forbidden terms — any check containing these is invalid
+    _FORBIDDEN_TERMS = [
+        "example.com", "logisticscompany.com", "yourbusiness.com",
+        "google analytics",  # cannot access another company's GA account
+        "yellow pages",       # doesn't have the data we check for
+        "tripadvisor",        # not in allowed sources for B2B
+        "confirmed if: true", "confirmed if: false", "confirmed if: n/a",
+        '"confirmed_if": "true"', '"confirmed_if": "false"', '"confirmed_if": "n/a"',
+    ]
+
+    def _validate_plans(plans: list) -> list[str]:
+        """Return list of violation strings found. Empty = valid."""
+        violations = []
+        raw = json.dumps(plans).lower()
+        for term in _FORBIDDEN_TERMS:
+            if term.lower() in raw:
+                violations.append(term)
+        return violations
 
     def _call_llm_for_plans(pain_subset):
         prompt = _build_signal_prompt(pain_subset)
-        for attempt in range(2):
-            raw = nvidia_chat(prompt, max_tokens=2000)
+        for attempt in range(4):
+            raw = nvidia_chat(prompt, max_tokens=3500)
             clean = (raw or "").strip()
             if not clean or clean.startswith("NVIDIA API error"):
-                continue  # retry
+                continue
             clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
             clean = _re_pi.sub(r"\s*```$", "", clean)
             try:
                 result = json.loads(clean)
-                if isinstance(result, list) and result:
-                    return result
+                if not (isinstance(result, list) and result):
+                    continue
+                violations = _validate_plans(result)
+                if violations:
+                    print(f"[signal_plans] Attempt {attempt+1}: rejected — found forbidden terms: {violations}. Retrying...")
+                    continue
+                return result
             except json.JSONDecodeError:
                 pass
         return []
@@ -1572,6 +1808,168 @@ async def pi_v2_extract_status(session_id: str):
         raise HTTPException(404, "Session not found")
     return st
 
+# ── Sub-tab 3 Mode B: Signal First ───────────────────────────────────────────
+
+@app.post("/prospect-intel/v2/extract-leads-signal-first")
+async def pi_v2_extract_leads_signal_first(request: PIV2SignalFirstRequest, background_tasks: BackgroundTasks):
+    """Signal First mode: search for businesses already showing pain signals on Indeed, Reddit & News."""
+    if not request.industry or not request.location:
+        raise HTTPException(400, "Industry and location are required")
+    if not request.signal_plans:
+        raise HTTPException(400, "Signal plans are required for Signal First mode — complete Sub-tab 2 first")
+    session_id = request.session_id or str(_uuid.uuid4())[:8]
+    _pi_v2_extract_status[session_id] = {
+        "done": False, "progress": "Starting Signal First scan...",
+        "error": None, "leads": [], "source_results": {}
+    }
+    background_tasks.add_task(_pi_signal_first_task, request, session_id)
+    return {"session_id": session_id, "message": "Signal First extraction started"}
+
+
+async def _pi_signal_first_task(request: PIV2SignalFirstRequest, session_id: str):
+    def log(msg):
+        if session_id in _pi_v2_extract_status:
+            _pi_v2_extract_status[session_id]["progress"] = msg
+
+    loop = asyncio.get_event_loop()
+    raw_candidates = []
+    source_results = {}
+
+    for plan in request.signal_plans:
+        pain_title = plan.get("pain_point_title") or plan.get("pain_point", "")
+        keywords = [chk.get("what_to_search", "") for chk in plan.get("checks", [])[:3] if chk.get("what_to_search")]
+        pain_keyword = keywords[0] if keywords else pain_title
+
+        log(f"Signal scan: '{pain_title}' — searching Indeed, Reddit & News...")
+
+        indeed_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_indeed(kw, request.industry, request.location)
+        )
+        for h in indeed_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(indeed_hits)
+
+        reddit_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_reddit(kw, request.industry)
+        )
+        for h in reddit_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(reddit_hits)
+
+        news_hits = await loop.run_in_executor(
+            None, lambda kw=pain_keyword: _si_search_news(kw, request.industry, request.location)
+        )
+        for h in news_hits:
+            h['pain_trigger'] = pain_title
+        raw_candidates.extend(news_hits)
+
+    for src_label in ['Indeed Jobs', 'Reddit', 'Google News']:
+        count = sum(1 for c in raw_candidates if src_label in c.get('source', ''))
+        source_results[src_label] = {"count": count, "status": "success" if count > 0 else "no_results"}
+
+    named = [c for c in raw_candidates if c.get('company_name')]
+    evidence_only = [c for c in raw_candidates if not c.get('company_name')]
+    source_results['Reddit (evidence context)'] = {
+        "count": len([e for e in evidence_only if 'Reddit' in e.get('source', '')]),
+        "status": "evidence_only"
+    }
+    source_results['Google News (evidence context)'] = {
+        "count": len([e for e in evidence_only if 'News' in e.get('source', '')]),
+        "status": "evidence_only"
+    }
+
+    seen_names: set = set()
+    unique_named = []
+    for c in named:
+        key = c['company_name'].lower().strip()
+        if key not in seen_names and len(key) > 2:
+            seen_names.add(key)
+            unique_named.append(c)
+
+    log(f"Found {len(unique_named)} named companies. Enriching with contact data...")
+
+    all_leads = []
+    for candidate in unique_named[:request.num_leads]:
+        log(f"Enriching: {candidate['company_name']}...")
+        enriched = await loop.run_in_executor(
+            None, lambda c=candidate: _si_enrich_company(c['company_name'], request.location)
+        )
+        website = enriched.get("website", "")
+        email = ""
+        if website and website not in ("N/A", ""):
+            wd = await loop.run_in_executor(None, lambda w=website: _pi_fetch_and_detect(w))
+            if wd.get("emails_found"):
+                email = wd["emails_found"][0]
+            if not email:
+                for path in ["/contact", "/contact-us"]:
+                    try:
+                        r = requests.get(website.rstrip("/") + path, timeout=5, headers={"User-Agent": "Mozilla/5.0"})
+                        if r.status_code == 200:
+                            found_em = _re_pi.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", r.text)
+                            skip = {"sentry.io", "example.com", "schema.org", "w3.org"}
+                            valid = [e for e in found_em if not any(d in e for d in skip)]
+                            if valid:
+                                email = valid[0]
+                                break
+                    except Exception:
+                        pass
+
+        all_leads.append({
+            "business_name": candidate['company_name'],
+            "website": website,
+            "phone": enriched.get("phone", ""),
+            "email": email,
+            "rating": "", "review_count": "",
+            "category": request.industry,
+            "location": request.location,
+            "source": candidate['source'],
+            "is_duplicate": False,
+            "status": "unanalyzed",
+            "session_id": session_id,
+            "extraction_mode": "signal_first",
+            "signal_trigger": candidate.get('pain_trigger', ''),
+            "signal_evidence_text": candidate.get('evidence_text', ''),
+            "signal_source_url": candidate.get('source_url', ''),
+            "signal_confirmed": True,
+        })
+
+    seen_domains: set = set()
+    for lead in all_leads:
+        raw_web = lead.get("website", "")
+        domain = raw_web.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].lower()
+        if domain and domain in seen_domains:
+            lead["is_duplicate"] = True
+        elif domain:
+            seen_domains.add(domain)
+
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        for lead in all_leads:
+            cur.execute("""
+                INSERT INTO pi_leads (session_id, business_name, website, phone, email, rating,
+                    review_count, category, location, source, is_duplicate, status)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (session_id, lead.get("business_name",""), lead.get("website",""),
+                  lead.get("phone",""), lead.get("email",""), lead.get("rating",""),
+                  lead.get("review_count",""), lead.get("category",""), lead.get("location",""),
+                  lead.get("source",""), lead.get("is_duplicate", False), "unanalyzed"))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[pi_signal_first_save] {e}")
+
+    _pi_save_session(session_id, leads_count=len(all_leads))
+    _pi_v2_extract_status[session_id] = {
+        "done": True,
+        "progress": f"Done — {len(all_leads)} signal-confirmed companies found",
+        "error": None,
+        "leads": all_leads,
+        "source_results": source_results,
+        "unique": len([l for l in all_leads if not l.get("is_duplicate")]),
+        "duplicates": len([l for l in all_leads if l.get("is_duplicate")]),
+    }
+
 # ── Sub-tab 4: Signal Analyzer ───────────────────────────────────────────────
 
 _pi_v2_analyze_status: dict = {}  # session_id -> {done, progress, current, total, leads}
@@ -1620,10 +2018,29 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             domain = website.replace("https://", "").replace("http://", "").split("/")[0]
             builtwith_data = _pi_check_builtwith(domain)
 
-        # Evaluate every check from every signal plan
+        # Pre-populate signal evidence for Signal First leads
         all_checks = []
         confirmed_count = 0
         checkable_count = 0
+
+        if lead.get("signal_confirmed") and lead.get("signal_evidence_text"):
+            pre_check = {
+                "pain_point": lead.get("signal_trigger", ""),
+                "check_name": f"Signal-Confirmed via {lead.get('source', 'Signal First search')}",
+                "where_to_look": lead.get("signal_source_url", ""),
+                "what_to_search": "",
+                "confirmed_if": "Pre-confirmed — company was surfaced because it publicly advertised this pain",
+                "confirmed": "yes",
+                "evidence": lead.get("signal_evidence_text", ""),
+                "check_method": "signal_first_search",
+                "was_checkable": True,
+                "difficulty": "easy",
+                "signal_type": "signal_first",
+                "decision_maker": {},
+            }
+            all_checks.append(pre_check)
+            confirmed_count += 1
+            checkable_count += 1
 
         for plan in request.signal_plans:
             pain_title = plan.get("pain_point_title") or plan.get("pain_point", "")
@@ -1642,6 +2059,8 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
                     "was_checkable": result["was_checkable"],
                     "difficulty": chk.get("difficulty", ""),
                     "signal_type": chk.get("signal_type", ""),
+                    "importance_level": chk.get("importance_level", "supporting"),
+                    "outreach_angle": chk.get("outreach_angle", ""),
                     "decision_maker": dm,
                 })
                 if result["was_checkable"]:
@@ -1649,7 +2068,30 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
                     if result["confirmed"] == "yes":
                         confirmed_count += 1
 
-        confidence_rate = round(confirmed_count / checkable_count * 100) if checkable_count > 0 else 0
+        _SCORE_WEIGHTS = {"critical": 3, "important": 2, "supporting": 1}
+        weighted_confirmed = sum(_SCORE_WEIGHTS.get(c.get("importance_level", "supporting"), 1)
+                                 for c in all_checks if c.get("confirmed") == "yes" and c.get("was_checkable"))
+        weighted_total = sum(_SCORE_WEIGHTS.get(c.get("importance_level", "supporting"), 1)
+                             for c in all_checks if c.get("was_checkable"))
+        signal_score = round(weighted_confirmed / weighted_total * 100) if weighted_total > 0 else 0
+        confidence_rate = signal_score
+
+        # LLM: score_reason — one sentence explaining why
+        score_reason = ""
+        try:
+            confirmed_names = [c["check_name"] for c in all_checks if c.get("confirmed") == "yes"]
+            not_confirmed_names = [c["check_name"] for c in all_checks if c.get("confirmed") == "no"]
+            score_reason_raw = nvidia_chat(
+                f"Lead: {name} ({request.industry})\nScore: {signal_score}%\n"
+                f"Confirmed: {confirmed_names[:4]}\nNot confirmed: {not_confirmed_names[:4]}\n"
+                f"Write ONE sentence (max 20 words) explaining WHY this score. Be specific, not generic.",
+                max_tokens=80
+            )
+            score_reason = (score_reason_raw or "").strip()
+            if score_reason.startswith("NVIDIA API error"):
+                score_reason = ""
+        except Exception:
+            pass
 
         # LLM: current_process and after_chatbot based on REAL evidence
         current_process = ""
@@ -1692,8 +2134,8 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             "review_count": lead.get("review_count") or lead.get("Reviews", ""),
             "category": lead.get("category") or lead.get("Category") or lead.get("Industry", ""),
             "location": lead.get("location") or lead.get("City", ""),
-            "signal_score": confidence_rate,
-            "confidence_rate": confidence_rate,
+            "signal_score": signal_score,
+            "confidence_rate": signal_score,
             "confirmed_checks": confirmed_count,
             "total_checkable": checkable_count,
             "total_checks": len(all_checks),
@@ -1702,6 +2144,11 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             "after_chatbot": after_tech,
             "decision_maker": dm_contact,
             "outreach_status": "not_contacted",
+            "score_reason": score_reason,
+            "extraction_mode": lead.get("extraction_mode", "leads_first"),
+            "signal_trigger": lead.get("signal_trigger", ""),
+            "signal_source_url": lead.get("signal_source_url", ""),
+            "signal_confirmed": bool(lead.get("signal_confirmed", False)),
             "website_fetch_status": ("success" if website_data.get("fetched") else website_data.get("error", "not checked")),
             "tech_detected": {
                 "live_chat": website_data.get("live_chat", []),
@@ -1719,18 +2166,23 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO pi_analyzed (session_id, business_name, website, phone, email,
-                    signal_score, confidence_rate, signal_evidence, current_process, after_chatbot, decision_maker)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+                    location, signal_score, confidence_rate, signal_evidence, current_process,
+                    after_chatbot, decision_maker, score_reason, extraction_mode,
+                    signal_trigger, signal_source_url, signal_confirmed)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (session_id, analyzed_lead["business_name"], analyzed_lead["website"],
                   analyzed_lead["phone"], analyzed_lead["email"],
-                  analyzed_lead["signal_score"], analyzed_lead["confidence_rate"],
+                  analyzed_lead["location"], analyzed_lead["signal_score"], analyzed_lead["confidence_rate"],
                   json.dumps(analyzed_lead["signal_evidence"]),
                   analyzed_lead["current_process"], analyzed_lead["after_chatbot"],
-                  analyzed_lead["decision_maker"]))
+                  analyzed_lead["decision_maker"], analyzed_lead["score_reason"],
+                  analyzed_lead["extraction_mode"], analyzed_lead["signal_trigger"],
+                  analyzed_lead["signal_source_url"], analyzed_lead["signal_confirmed"]))
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[pi_analyzed_save] {e}")
+            _pi_v2_analyze_status[session_id]["db_error"] = str(e)
 
         _pi_v2_analyze_status[session_id]["leads"] = analyzed
 
@@ -1771,6 +2223,111 @@ async def pi_v2_get_analyzed(session_id: str):
     except Exception as e:
         raise HTTPException(500, f"Error fetching analyzed results: {str(e)}")
 
+class PIV2GenerateOutreachRequest(BaseModel):
+    lead: dict
+    technology: str = ""
+    industry: str = ""
+    user_offer: str = ""
+
+class PIV2SendOutreachRequest(BaseModel):
+    session_id: str = ""
+    business_name: str
+    email: str
+    subject: str
+    body: str
+
+@app.post("/prospect-intel/v2/generate-outreach")
+async def pi_v2_generate_outreach(request: PIV2GenerateOutreachRequest):
+    from market_research import nvidia_chat
+    lead = request.lead
+    name = lead.get("business_name", "")
+    industry = request.industry or lead.get("category", "")
+    technology = request.technology or "AI automation"
+
+    confirmed_checks = [c for c in (lead.get("signal_evidence") or []) if c.get("confirmed") == "yes"]
+    confirmed_signals = "\n".join([f"- {c['check_name']}: {c.get('evidence','')}" for c in confirmed_checks[:5]])
+    top_angle = next((c.get("outreach_angle","") for c in confirmed_checks if c.get("importance_level") == "critical"), "")
+    if not top_angle and confirmed_checks:
+        top_angle = confirmed_checks[0].get("outreach_angle","")
+
+    prompt = (
+        f"Write a cold outreach email selling {technology} to {name} ({industry}).\n"
+        f"Lead score: {lead.get('signal_score',0)}% — {lead.get('score_reason','')}\n"
+        f"Decision maker: {lead.get('decision_maker','')}\n"
+        f"They currently do: {lead.get('current_process','')}\n"
+        f"After {technology}: {lead.get('after_chatbot','')}\n"
+        f"Top pitch angle: {top_angle}\n"
+        f"Confirmed signals:\n{confirmed_signals or '(none yet)'}\n"
+        f"Our offer: {request.user_offer or 'AI automation solution'}\n\n"
+        f"Rules: Subject under 60 chars. Body 3 short paragraphs: opener referencing a specific confirmed signal, "
+        f"value prop with the after outcome, CTA. Max 150 words. End body with: 'Reply STOP to unsubscribe.'\n"
+        f"Return JSON only: {{\"subject\": \"...\", \"body\": \"...\", \"pitch_angle\": \"...\", \"decision_maker\": \"...\"}}"
+    )
+    try:
+        import re as _re2
+        raw = nvidia_chat(prompt, max_tokens=500)
+        clean = _re2.sub(r'^```(?:json)?\s*', '', (raw or "").strip())
+        clean = _re2.sub(r'\s*```$', '', clean)
+        return json.loads(clean)
+    except Exception as e:
+        raise HTTPException(500, f"Email generation failed: {str(e)}")
+
+@app.post("/prospect-intel/v2/send-outreach")
+async def pi_v2_send_outreach(request: PIV2SendOutreachRequest):
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+    from_name = os.getenv("FROM_NAME", "Sales Team")
+
+    if not smtp_user or not smtp_pass:
+        raise HTTPException(400, "SMTP credentials not configured (set SMTP_USER and SMTP_PASS)")
+    if not request.email:
+        raise HTTPException(400, "No recipient email")
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = request.subject
+        msg["From"] = f"{from_name} <{smtp_user}>"
+        msg["To"] = request.email
+        msg.attach(MIMEText(request.body, "plain"))
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        try:
+            conn = db_manager.get_pg_conn()
+            cur = conn.cursor()
+            cur.execute("UPDATE pi_analyzed SET outreach_status='email_sent' WHERE session_id=%s AND business_name=%s",
+                        (request.session_id, request.business_name))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[send_outreach_db] {e}")
+        return {"success": True, "message": f"Email sent to {request.email}"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send email: {str(e)}")
+
+@app.post("/prospect-intel/v2/unsubscribe")
+async def pi_v2_unsubscribe(business_name: str, session_id: str = ""):
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        if session_id:
+            cur.execute("UPDATE pi_analyzed SET outreach_status='unsubscribed' WHERE session_id=%s AND business_name=%s",
+                        (session_id, business_name))
+        else:
+            cur.execute("UPDATE pi_analyzed SET outreach_status='unsubscribed' WHERE business_name=%s", (business_name,))
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, f"Unsubscribe failed: {str(e)}")
+
 @app.get("/prospect-intel/v2/history")
 async def pi_v2_history():
     """List all PI sessions ordered by most recent, up to 50."""
@@ -1778,6 +2335,9 @@ async def pi_v2_history():
         import psycopg2.extras
         conn = db_manager.get_pg_conn()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Ensure table exists before querying
+        cur.execute(_PI_SESSIONS_DDL)
+        conn.commit()
         cur.execute("""
             SELECT session_id, technology, industry, leads_count, analyzed_count,
                    created_at, updated_at
@@ -1791,7 +2351,7 @@ async def pi_v2_history():
         return rows
     except Exception as e:
         print(f"[pi_history] {e}")
-        return []
+        raise HTTPException(500, f"History load failed: {str(e)}")
 
 @app.get("/prospect-intel/v2/session/{session_id}")
 async def pi_v2_load_session(session_id: str):
@@ -1819,10 +2379,7 @@ async def pi_v2_load_session(session_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 if __name__ == "__main__":
     import uvicorn
     db_manager.init_db()
-    port = int(os.getenv("PORT", 8000))
-    print(f"Starting server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

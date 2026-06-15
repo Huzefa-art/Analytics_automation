@@ -2667,6 +2667,8 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
                     "was_checkable": result["was_checkable"],
                     "difficulty": chk.get("difficulty", ""),
                     "signal_type": chk.get("signal_type", ""),
+                    "importance_level": chk.get("importance_level", "supporting"),
+                    "outreach_angle": chk.get("outreach_angle", ""),
                     "decision_maker": dm,
                 })
                 if result["was_checkable"]:
@@ -2674,7 +2676,30 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
                     if result["confirmed"] == "yes":
                         confirmed_count += 1
 
-        confidence_rate = round(confirmed_count / checkable_count * 100) if checkable_count > 0 else 0
+        _SCORE_WEIGHTS = {"critical": 3, "important": 2, "supporting": 1}
+        weighted_confirmed = sum(_SCORE_WEIGHTS.get(c.get("importance_level", "supporting"), 1)
+                                 for c in all_checks if c.get("confirmed") == "yes" and c.get("was_checkable"))
+        weighted_total = sum(_SCORE_WEIGHTS.get(c.get("importance_level", "supporting"), 1)
+                             for c in all_checks if c.get("was_checkable"))
+        signal_score = round(weighted_confirmed / weighted_total * 100) if weighted_total > 0 else 0
+        confidence_rate = signal_score
+
+        # LLM: score_reason — one sentence explaining why
+        score_reason = ""
+        try:
+            confirmed_names = [c["check_name"] for c in all_checks if c.get("confirmed") == "yes"]
+            not_confirmed_names = [c["check_name"] for c in all_checks if c.get("confirmed") == "no"]
+            score_reason_raw = nvidia_chat(
+                f"Lead: {name} ({request.industry})\nScore: {signal_score}%\n"
+                f"Confirmed: {confirmed_names[:4]}\nNot confirmed: {not_confirmed_names[:4]}\n"
+                f"Write ONE sentence (max 20 words) explaining WHY this score. Be specific, not generic.",
+                max_tokens=80
+            )
+            score_reason = (score_reason_raw or "").strip()
+            if score_reason.startswith("NVIDIA API error"):
+                score_reason = ""
+        except Exception:
+            pass
 
         # LLM: current_process and after_chatbot based on REAL evidence
         current_process = ""
@@ -2717,8 +2742,8 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             "review_count": lead.get("review_count") or lead.get("Reviews", ""),
             "category": lead.get("category") or lead.get("Category") or lead.get("Industry", ""),
             "location": lead.get("location") or lead.get("City", ""),
-            "signal_score": confidence_rate,
-            "confidence_rate": confidence_rate,
+            "signal_score": signal_score,
+            "confidence_rate": signal_score,
             "confirmed_checks": confirmed_count,
             "total_checkable": checkable_count,
             "total_checks": len(all_checks),
@@ -2727,6 +2752,11 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             "after_chatbot": after_tech,
             "decision_maker": dm_contact,
             "outreach_status": "not_contacted",
+            "score_reason": score_reason,
+            "extraction_mode": lead.get("extraction_mode", "leads_first"),
+            "signal_trigger": lead.get("signal_trigger", ""),
+            "signal_source_url": lead.get("signal_source_url", ""),
+            "signal_confirmed": bool(lead.get("signal_confirmed", False)),
             "website_fetch_status": ("success" if website_data.get("fetched") else website_data.get("error", "not checked")),
             "tech_detected": {
                 "live_chat": website_data.get("live_chat", []),
@@ -2744,18 +2774,23 @@ async def _pi_analyze_task(request: PIV2AnalyzeRequest, session_id: str):
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO pi_analyzed (session_id, business_name, website, phone, email,
-                    signal_score, confidence_rate, signal_evidence, current_process, after_chatbot, decision_maker)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+                    location, signal_score, confidence_rate, signal_evidence, current_process,
+                    after_chatbot, decision_maker, score_reason, extraction_mode,
+                    signal_trigger, signal_source_url, signal_confirmed)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (session_id, analyzed_lead["business_name"], analyzed_lead["website"],
                   analyzed_lead["phone"], analyzed_lead["email"],
-                  analyzed_lead["signal_score"], analyzed_lead["confidence_rate"],
+                  analyzed_lead["location"], analyzed_lead["signal_score"], analyzed_lead["confidence_rate"],
                   json.dumps(analyzed_lead["signal_evidence"]),
                   analyzed_lead["current_process"], analyzed_lead["after_chatbot"],
-                  analyzed_lead["decision_maker"]))
+                  analyzed_lead["decision_maker"], analyzed_lead["score_reason"],
+                  analyzed_lead["extraction_mode"], analyzed_lead["signal_trigger"],
+                  analyzed_lead["signal_source_url"], analyzed_lead["signal_confirmed"]))
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[pi_analyzed_save] {e}")
+            _pi_v2_analyze_status[session_id]["db_error"] = str(e)
 
         _pi_v2_analyze_status[session_id]["leads"] = analyzed
 
@@ -2795,6 +2830,111 @@ async def pi_v2_get_analyzed(session_id: str):
         return {"session_id": session_id, "results": results}
     except Exception as e:
         raise HTTPException(500, f"Error fetching analyzed results: {str(e)}")
+
+class PIV2GenerateOutreachRequest(BaseModel):
+    lead: dict
+    technology: str = ""
+    industry: str = ""
+    user_offer: str = ""
+
+class PIV2SendOutreachRequest(BaseModel):
+    session_id: str = ""
+    business_name: str
+    email: str
+    subject: str
+    body: str
+
+@app.post("/prospect-intel/v2/generate-outreach")
+async def pi_v2_generate_outreach(request: PIV2GenerateOutreachRequest):
+    from market_research import nvidia_chat
+    lead = request.lead
+    name = lead.get("business_name", "")
+    industry = request.industry or lead.get("category", "")
+    technology = request.technology or "AI automation"
+
+    confirmed_checks = [c for c in (lead.get("signal_evidence") or []) if c.get("confirmed") == "yes"]
+    confirmed_signals = "\n".join([f"- {c['check_name']}: {c.get('evidence','')}" for c in confirmed_checks[:5]])
+    top_angle = next((c.get("outreach_angle","") for c in confirmed_checks if c.get("importance_level") == "critical"), "")
+    if not top_angle and confirmed_checks:
+        top_angle = confirmed_checks[0].get("outreach_angle","")
+
+    prompt = (
+        f"Write a cold outreach email selling {technology} to {name} ({industry}).\n"
+        f"Lead score: {lead.get('signal_score',0)}% — {lead.get('score_reason','')}\n"
+        f"Decision maker: {lead.get('decision_maker','')}\n"
+        f"They currently do: {lead.get('current_process','')}\n"
+        f"After {technology}: {lead.get('after_chatbot','')}\n"
+        f"Top pitch angle: {top_angle}\n"
+        f"Confirmed signals:\n{confirmed_signals or '(none yet)'}\n"
+        f"Our offer: {request.user_offer or 'AI automation solution'}\n\n"
+        f"Rules: Subject under 60 chars. Body 3 short paragraphs: opener referencing a specific confirmed signal, "
+        f"value prop with the after outcome, CTA. Max 150 words. End body with: 'Reply STOP to unsubscribe.'\n"
+        f"Return JSON only: {{\"subject\": \"...\", \"body\": \"...\", \"pitch_angle\": \"...\", \"decision_maker\": \"...\"}}"
+    )
+    try:
+        import re as _re2
+        raw = nvidia_chat(prompt, max_tokens=500)
+        clean = _re2.sub(r'^```(?:json)?\s*', '', (raw or "").strip())
+        clean = _re2.sub(r'\s*```$', '', clean)
+        return json.loads(clean)
+    except Exception as e:
+        raise HTTPException(500, f"Email generation failed: {str(e)}")
+
+@app.post("/prospect-intel/v2/send-outreach")
+async def pi_v2_send_outreach(request: PIV2SendOutreachRequest):
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+    from_name = os.getenv("FROM_NAME", "Sales Team")
+
+    if not smtp_user or not smtp_pass:
+        raise HTTPException(400, "SMTP credentials not configured (set SMTP_USER and SMTP_PASS)")
+    if not request.email:
+        raise HTTPException(400, "No recipient email")
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = request.subject
+        msg["From"] = f"{from_name} <{smtp_user}>"
+        msg["To"] = request.email
+        msg.attach(MIMEText(request.body, "plain"))
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        try:
+            conn = db_manager.get_pg_conn()
+            cur = conn.cursor()
+            cur.execute("UPDATE pi_analyzed SET outreach_status='email_sent' WHERE session_id=%s AND business_name=%s",
+                        (request.session_id, request.business_name))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[send_outreach_db] {e}")
+        return {"success": True, "message": f"Email sent to {request.email}"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to send email: {str(e)}")
+
+@app.post("/prospect-intel/v2/unsubscribe")
+async def pi_v2_unsubscribe(business_name: str, session_id: str = ""):
+    try:
+        conn = db_manager.get_pg_conn()
+        cur = conn.cursor()
+        if session_id:
+            cur.execute("UPDATE pi_analyzed SET outreach_status='unsubscribed' WHERE session_id=%s AND business_name=%s",
+                        (session_id, business_name))
+        else:
+            cur.execute("UPDATE pi_analyzed SET outreach_status='unsubscribed' WHERE business_name=%s", (business_name,))
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, f"Unsubscribe failed: {str(e)}")
 
 @app.get("/prospect-intel/v2/history")
 async def pi_v2_history():
