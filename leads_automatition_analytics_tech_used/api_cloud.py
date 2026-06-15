@@ -1223,30 +1223,50 @@ def _pi_companies_house_sync(industry: str, location: str, max_results: int = 10
 # ── Signal First helper functions ─────────────────────────────────────────────
 
 def _si_search_indeed(pain_keyword: str, industry: str, location: str, max_results: int = 8) -> list:
+    """Search for companies hiring around the pain signal via SerpAPI (Indeed RSS is dead on cloud)."""
     found = []
+    serp_key = os.getenv("serp_api", "")
+    if not serp_key:
+        print("[si_indeed] No serp_api key — skipping Indeed search")
+        return found
     try:
-        import feedparser
-        q = urllib.parse.quote_plus(f"{pain_keyword} {industry}")
-        l_enc = urllib.parse.quote_plus(location)
-        url = f"https://www.indeed.com/rss?q={q}&l={l_enc}&limit={max_results}"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=8)
+        # Search Google for job postings mentioning the pain keyword
+        q = f'"{pain_keyword}" "{industry}" {location} (hiring OR jobs OR "we are looking")'
+        r = _requests.get("https://serpapi.com/search.json", params={
+            "api_key": serp_key,
+            "engine": "google",
+            "q": q,
+            "num": max_results,
+            "gl": "us",
+        }, timeout=12)
         if r.status_code != 200:
+            print(f"[si_indeed] SerpAPI {r.status_code}")
             return found
-        feed = feedparser.parse(r.content)
-        for entry in feed.entries:
-            title = entry.get('title', '')
-            company = ''
-            if ' at ' in title:
-                company = title.split(' at ')[-1].strip()
-            elif ' - ' in title:
-                parts = title.split(' - ')
-                if len(parts) >= 2:
-                    company = parts[1].strip()
-            if company and len(company) > 2:
+        data = r.json()
+        for res in data.get("organic_results", [])[:max_results]:
+            title = res.get("title", "")
+            snippet = res.get("snippet", "")
+            link = res.get("link", "")
+            # Extract company name from title patterns: "Job Title at Company" or "Company | Job"
+            company = ""
+            if " at " in title:
+                company = title.split(" at ")[-1].strip().split("|")[0].strip().split("-")[0].strip()
+            elif " | " in title:
+                parts = title.split(" | ")
+                company = parts[-1].strip() if len(parts) > 1 else ""
+            elif " - " in title:
+                parts = title.split(" - ")
+                company = parts[1].strip() if len(parts) >= 2 else ""
+            # Fallback: try to extract from source domain
+            if not company or len(company) < 3:
+                source = res.get("source", "")
+                if source and source not in ("Indeed", "LinkedIn", "Glassdoor", "ZipRecruiter"):
+                    company = source
+            if company and len(company) > 2 and len(company) < 60:
                 found.append({
                     'company_name': company,
-                    'evidence_text': f"Indeed job posting: \"{title}\" — {entry.get('summary', '')[:200]}",
-                    'source_url': entry.get('link', ''),
+                    'evidence_text': f"Job signal: \"{title}\" — {snippet[:200]}",
+                    'source_url': link,
                     'source': 'Indeed Jobs',
                 })
     except Exception as e:
@@ -1294,9 +1314,16 @@ def _si_search_news(pain_keyword: str, industry: str, location: str, max_results
             title = title_el.get_text() if title_el else ''
             link = link_el.get_text() if link_el else ''
             desc = desc_el.get_text() if desc_el else ''
+            # Try to extract company from "Company does X" or "X: Company Y" patterns
+            company = None
+            if ' - ' in title:
+                parts = title.split(' - ')
+                candidate = parts[-1].strip()
+                if 2 < len(candidate) < 50 and candidate[0].isupper():
+                    company = candidate
             if title:
                 found.append({
-                    'company_name': None,
+                    'company_name': company,
                     'evidence_text': f"Google News: \"{title}\" — {desc[:150]}",
                     'source_url': link,
                     'source': 'Google News',
@@ -1725,34 +1752,88 @@ async def _pi_extract_leads_task(request: PIV2ExtractLeadsRequest, session_id: s
     for source in request.sources:
         log(f"Scraping {source}...")
         if source == "Google Maps":
-            try:
-                q = urllib.parse.quote_plus(f"{request.industry} in {request.location}")
-                maps_url = f"https://www.google.com/maps/search/{q}"
-                results = await scrape_google_maps(maps_url, per_source + 5)
-                normalized = [{
-                    "business_name": r.get("Business Name", ""),
-                    "website": r.get("Website", ""),
-                    "phone": r.get("Phone", ""),
-                    "email": r.get("Email", ""),
-                    "rating": str(r.get("Rating", "")),
-                    "review_count": str(r.get("Reviews", "")),
-                    "category": r.get("Industry", request.industry),
-                    "location": request.location,
-                    "source": "Google Maps",
-                } for r in results]
-                all_leads.extend(normalized)
-                source_results["Google Maps"] = {"count": len(normalized), "status": "success"}
-            except Exception as e:
-                source_results["Google Maps"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+            serp_key = os.getenv("serp_api", "")
+            if serp_key:
+                # Use SerpAPI google_local — works on Render, no Playwright needed
+                try:
+                    log(f"Searching Google Local via SerpAPI for {request.industry} in {request.location}...")
+                    r = _requests.get("https://serpapi.com/search.json", params={
+                        "api_key": serp_key,
+                        "engine": "google_local",
+                        "q": f"{request.industry}",
+                        "location": request.location,
+                        "hl": "en",
+                        "gl": "us",
+                        "num": per_source + 5,
+                    }, timeout=15)
+                    normalized = []
+                    if r.status_code == 200:
+                        data = r.json()
+                        for res in data.get("local_results", [])[:per_source]:
+                            normalized.append({
+                                "business_name": res.get("title", ""),
+                                "website": res.get("website", ""),
+                                "phone": res.get("phone", ""),
+                                "email": "",
+                                "rating": str(res.get("rating", "")),
+                                "review_count": str(res.get("reviews", "")),
+                                "category": res.get("type", request.industry),
+                                "location": res.get("address", request.location),
+                                "source": "Google Maps",
+                            })
+                    all_leads.extend(normalized)
+                    source_results["Google Maps"] = {"count": len(normalized), "status": "success" if normalized else "no_results"}
+                except Exception as e:
+                    source_results["Google Maps"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+            else:
+                # No SerpAPI key — Playwright not available on cloud
+                try:
+                    await scrape_google_maps("", 0)  # will raise RuntimeError
+                except Exception as e:
+                    source_results["Google Maps"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
 
         elif source == "Yellow Pages":
-            try:
-                loop = asyncio.get_event_loop()
-                yp = await loop.run_in_executor(None, lambda: _pi_yp_sync(request.industry, request.location, per_source))
-                all_leads.extend(yp)
-                source_results["Yellow Pages"] = {"count": len(yp), "status": "success"}
-            except Exception as e:
-                source_results["Yellow Pages"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+            serp_key = os.getenv("serp_api", "")
+            if serp_key:
+                try:
+                    log(f"Searching Yelp via SerpAPI for {request.industry} in {request.location}...")
+                    r = _requests.get("https://serpapi.com/search.json", params={
+                        "api_key": serp_key,
+                        "engine": "yelp",
+                        "find_desc": request.industry,
+                        "find_loc": request.location,
+                        "cflt": request.industry.replace(" ", "_").lower(),
+                    }, timeout=15)
+                    yp_leads = []
+                    if r.status_code == 200:
+                        for biz in r.json().get("organic_results", [])[:per_source]:
+                            yp_leads.append({
+                                "business_name": biz.get("name", ""),
+                                "phone": biz.get("phone", ""),
+                                "website": biz.get("website", ""),
+                                "email": "",
+                                "rating": str(biz.get("rating", {}).get("value", "") if isinstance(biz.get("rating"), dict) else biz.get("rating", "")),
+                                "review_count": str(biz.get("reviews", "")),
+                                "category": request.industry,
+                                "location": biz.get("neighborhoods", [request.location])[0] if biz.get("neighborhoods") else request.location,
+                                "source": "Yellow Pages",
+                            })
+                    if not yp_leads:
+                        # fallback to direct scrape
+                        loop = asyncio.get_event_loop()
+                        yp_leads = await loop.run_in_executor(None, lambda: _pi_yp_sync(request.industry, request.location, per_source))
+                    all_leads.extend(yp_leads)
+                    source_results["Yellow Pages"] = {"count": len(yp_leads), "status": "success" if yp_leads else "no_results"}
+                except Exception as e:
+                    source_results["Yellow Pages"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
+            else:
+                try:
+                    loop = asyncio.get_event_loop()
+                    yp = await loop.run_in_executor(None, lambda: _pi_yp_sync(request.industry, request.location, per_source))
+                    all_leads.extend(yp)
+                    source_results["Yellow Pages"] = {"count": len(yp), "status": "success" if yp else "no_results"}
+                except Exception as e:
+                    source_results["Yellow Pages"] = {"count": 0, "status": f"error: {str(e)[:120]}"}
 
         elif source == "Companies House UK":
             try:
