@@ -2201,19 +2201,43 @@ Return ONLY a valid JSON array (no markdown, no explanation, no trailing text):
 
 IMPORTANT: The example above shows the correct format. Now generate plans for the ACTUAL pain points listed. Use {{company_website}} as domain placeholder. Never write "true"/"false"/"N/A" for confirmed_if."""
 
+    # Hard-coded forbidden terms — any check containing these is invalid
+    _FORBIDDEN_TERMS = [
+        "example.com", "logisticscompany.com", "yourbusiness.com",
+        "google analytics",  # cannot access another company's GA account
+        "yellow pages",       # doesn't have the data we check for
+        "tripadvisor",        # not in allowed sources for B2B
+        "confirmed if: true", "confirmed if: false", "confirmed if: n/a",
+        '"confirmed_if": "true"', '"confirmed_if": "false"', '"confirmed_if": "n/a"',
+    ]
+
+    def _validate_plans(plans: list) -> list[str]:
+        """Return list of violation strings found. Empty = valid."""
+        violations = []
+        raw = json.dumps(plans).lower()
+        for term in _FORBIDDEN_TERMS:
+            if term.lower() in raw:
+                violations.append(term)
+        return violations
+
     def _call_llm_for_plans(pain_subset):
         prompt = _build_signal_prompt(pain_subset)
-        for attempt in range(2):
+        for attempt in range(4):
             raw = nvidia_chat(prompt, max_tokens=3500)
             clean = (raw or "").strip()
             if not clean or clean.startswith("NVIDIA API error"):
-                continue  # retry
+                continue
             clean = _re_pi.sub(r"^```(?:json)?\s*", "", clean)
             clean = _re_pi.sub(r"\s*```$", "", clean)
             try:
                 result = json.loads(clean)
-                if isinstance(result, list) and result:
-                    return result
+                if not (isinstance(result, list) and result):
+                    continue
+                violations = _validate_plans(result)
+                if violations:
+                    print(f"[signal_plans] Attempt {attempt+1}: rejected — found forbidden terms: {violations}. Retrying...")
+                    continue
+                return result
             except json.JSONDecodeError:
                 pass
         return []
